@@ -20,6 +20,13 @@ igf_config() {
   LOCAL_JOBS_IGF_CONFIG="$LOCAL_JOBS_IGF_CONFIG" "$LOCAL_JOBS_PYTHON" "$BACKEND/config.py" "$@"
 }
 
+# Best-effort lifecycle event (audit stream); never fails the verb.
+igf_emit() { # verb id
+  "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/events.py" emit --kind lifecycle \
+    --id "${2:-}" --type incremental-git-fetch --actor "${LOCAL_JOBS_ACTOR:-cli}" \
+    --payload "{\"verb\":\"$1\"}" >/dev/null 2>&1 || true
+}
+
 [[ -f "$BACKEND/config.py" ]] || die "backend not found: $BACKEND"
 
 usage() {
@@ -186,7 +193,13 @@ cmd_run() {
   local skip_jitter=1
   (( jitter == 1 )) && skip_jitter=0
 
+  # A scheduled global run (jitter, no target) fetches only inherit repos so a
+  # repo with its own per-repo agent is never fetched twice (P0-1).
+  local inherit_only=0
+  (( jitter == 1 )) && [[ -z "$id" ]] && inherit_only=1
+
   if LOCAL_JOBS_IGF_DRY_RUN="$dry" LOCAL_JOBS_IGF_SKIP_JITTER="$skip_jitter" \
+       LOCAL_JOBS_IGF_INHERIT_ONLY="$inherit_only" \
        "$BACKEND/run-all.sh" ${id:+"$id"}; then
     rc=0
   else
@@ -197,11 +210,16 @@ cmd_run() {
 
   after="$(snapshot "$id")"
 
+  # Emit one aggregate runlog record plus (for an all-repos run) one per_instance
+  # record per repo so each repo's last-run is recorded — no more "never run"
+  # for inherit repos that only ever ran inside the aggregate window (P1-C).
   BEFORE="$before" AFTER="$after" STATUS="$status" TARGET="${id:-all}" \
     "$LOCAL_JOBS_PYTHON" - <<'PY'
 import json, os
 before = json.loads(os.environ["BEFORE"] or "{}")
 after = json.loads(os.environ["AFTER"] or "{}")
+status = os.environ["STATUS"]
+target = os.environ["TARGET"]
 repos = []
 for rid in sorted(set(before) | set(after)):
     b = before.get(rid, {}); a = after.get(rid, {})
@@ -210,8 +228,12 @@ for rid in sorted(set(before) | set(after)):
         "head_before": b.get("head"), "head_after": a.get("head"),
         "behind_before": b.get("behind"), "behind_after": a.get("behind"),
     })
-payload = {"status": os.environ["STATUS"],
-           "fields": {"target": os.environ["TARGET"], "repos": repos}}
+payload = {"status": status, "fields": {"target": target, "repos": repos}}
+if target == "all":
+    payload["per_instance"] = [
+        {"job_id": r["id"], "status": status, "fields": {"target": r["id"], "repos": [r]}}
+        for r in repos
+    ]
 print("@@RUNLOG@@ " + json.dumps(payload, separators=(",", ":")))
 PY
   return "$rc"
@@ -269,6 +291,11 @@ case "${1:-}" in
     args=(add --id "$id" --path "$path" --branch "$branch" --enabled "$enabled" --schedule "$schedule")
     [[ -n "$remote" ]] && args+=(--remote "$remote")
     igf_config "${args[@]}"
+    # A custom-scheduled, enabled repo gets its own per-repo agent immediately.
+    if [[ "$schedule" != "inherit" && "$enabled" =~ ^(true|1|yes)$ ]]; then
+      "$BACKEND/install-launchd.sh" --repo "$id" || true
+    fi
+    igf_emit add "$id"
     ;;
   update)
     shift
@@ -283,6 +310,7 @@ case "${1:-}" in
       esac
       shift
     done
+    [[ -n "$enabled" || -n "$schedule" ]] || die "update requires --schedule and/or --enabled"
     if [[ -n "$enabled" ]]; then
       [[ -n "$id" && "$id" != "__global__" ]] || die "update --enabled requires a repo --id"
       case "$enabled" in
@@ -308,7 +336,7 @@ case "${1:-}" in
         fi
       fi
     fi
-    [[ -n "$enabled" || -n "$schedule" ]] || die "update requires --schedule and/or --enabled"
+    igf_emit update "${id:-__global__}"
     ;;
   delete)
     shift
@@ -332,6 +360,7 @@ case "${1:-}" in
     if (( purge == 1 )) && grep -q "^PURGE_LAUNCHD:${id}$" <<<"$output"; then
       "$BACKEND/uninstall-launchd.sh" --repo "$id" || true
     fi
+    igf_emit delete "$id"
     ;;
   repair)
     shift
@@ -346,6 +375,7 @@ case "${1:-}" in
       kind="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; s=json.load(sys.stdin).get("schedule"); print("custom" if isinstance(s,dict) else "inherit")' <<<"$repo_json")"
       [[ "$kind" == "custom" ]] && "$BACKEND/install-launchd.sh" --repo "$repo_id"
     done < <(igf_config list)
+    igf_emit repair "${id:-all}"
     printf 'repair: complete\n'
     ;;
   enable)
@@ -353,12 +383,20 @@ case "${1:-}" in
     while [[ $# -gt 0 ]]; do case "$1" in --id) shift; id="${1:-}" ;; *) die "unknown enable option: $1" ;; esac; shift; done
     [[ -n "$id" && "$id" != "__global__" ]] || die "enable requires a repo --id"
     igf_config enable --id "$id"
+    # Re-create the per-repo agent if this repo is custom-scheduled.
+    repo_json="$(igf_config repo "$id")"
+    kind="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; s=json.load(sys.stdin).get("schedule"); print("custom" if isinstance(s,dict) else "inherit")' <<<"$repo_json")"
+    [[ "$kind" == "custom" ]] && "$BACKEND/install-launchd.sh" --repo "$id" || true
+    igf_emit enable "$id"
     ;;
   disable)
     shift; id=""
     while [[ $# -gt 0 ]]; do case "$1" in --id) shift; id="${1:-}" ;; *) die "unknown disable option: $1" ;; esac; shift; done
     [[ -n "$id" && "$id" != "__global__" ]] || die "disable requires a repo --id"
     igf_config disable --id "$id"
+    # A disabled repo must not keep its own per-repo agent running (no drift).
+    "$BACKEND/uninstall-launchd.sh" --repo "$id" 2>/dev/null || true
+    igf_emit disable "$id"
     ;;
   doctor)
     issues=0

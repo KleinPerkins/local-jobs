@@ -36,7 +36,11 @@ apply_jitter() {
   window_seconds=$(( (window_end - window_start) * 3600 ))
   (( window_seconds > 0 )) || die "invalid schedule window: ${window_start}-${window_end}"
 
-  jitter=$(( RANDOM % window_seconds ))
+  # Use the shared scheduler for jitter so the full window is covered
+  # (bash $RANDOM caps at 32767s ~9.1h and truncates longer windows — P2-8).
+  jitter="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/schedule.py" jitter \
+    --schedule "{\"window_start_hour\":$window_start,\"window_end_hour\":$window_end,\"use_jitter\":true}" 2>/dev/null)"
+  [[ "$jitter" =~ ^[0-9]+$ ]] || jitter=$(( RANDOM % window_seconds ))
   log "Schedule window ${window_start}:00-${window_end}:00; sleeping ${jitter}s (~$(( jitter / 60 )) min)"
   if [[ "$DRY_RUN" == "1" ]]; then
     log "[dry-run] would sleep ${jitter}s"
@@ -63,6 +67,14 @@ run_all() {
     return 0
   fi
 
+  # The global scheduled window fetches only inherit repos; a repo with its own
+  # per-repo agent is fetched by that agent, never twice (P0-1). A manual
+  # `run-job --all` (INHERIT_ONLY unset) still fetches every enabled repo.
+  local id_source="enabled-ids"
+  if [[ "${LOCAL_JOBS_IGF_INHERIT_ONLY:-0}" == "1" ]]; then
+    id_source="inherit-ids"
+  fi
+
   while IFS= read -r repo_id; do
     [[ -n "$repo_id" ]] || continue
     if fetch_one "$repo_id"; then
@@ -71,7 +83,7 @@ run_all() {
       FAILURES=$((FAILURES + 1))
       log_err "[$repo_id] fetch failed"
     fi
-  done < <(config_py enabled-ids)
+  done < <(config_py "$id_source")
 }
 
 main() {

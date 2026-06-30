@@ -22,8 +22,18 @@ def config_path(path: str | None = None) -> Path:
 
 
 def _check_version(data: dict[str, Any]) -> None:
-    if data.get("version") != 1:
-        raise ValueError(f"unsupported config version: {data.get('version')!r}")
+    # Forward-migration policy (P1-3): never brick existing instances on a
+    # version bump. v1/missing load as-is; a higher version still loads (the
+    # schema is forward-compatible via defaults-merge) with a one-line note.
+    version = data.get("version", 1)
+    if version in (None, 1):
+        return
+    if not isinstance(version, int) or version < 1:
+        raise ValueError(f"unsupported config version: {version!r}")
+    print(
+        f"incremental-git-fetch: config version {version} > 1; loading forward-compatibly",
+        file=sys.stderr,
+    )
 
 
 def load_raw_config(path: str | None = None) -> dict[str, Any]:
@@ -116,6 +126,19 @@ def cmd_get_repo(repo_id: str) -> int:
 def cmd_enabled_ids() -> int:
     for repo in load_config()["repos"]:
         if repo.get("enabled", True):
+            print(repo["id"])
+    return 0
+
+
+def cmd_inherit_ids() -> int:
+    """Enabled repos that follow the global window (no per-repo agent).
+
+    The global scheduled run fetches only these so a repo with its own
+    per-repo agent is never also fetched in the global window (no double-run).
+    """
+    for repo in load_config()["repos"]:
+        schedule = repo.get("schedule", "inherit")
+        if repo.get("enabled", True) and (schedule == "inherit" or schedule is None):
             print(repo["id"])
     return 0
 
@@ -354,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("validate")
     sub.add_parser("global")
     sub.add_parser("enabled-ids")
+    sub.add_parser("inherit-ids")
     sub.add_parser("view")
 
     repo_p = sub.add_parser("repo")
@@ -399,6 +423,7 @@ def main() -> int:
         "validate",
         "global",
         "enabled-ids",
+        "inherit-ids",
         "repo",
     }:
         command = sys.argv[1]
@@ -410,6 +435,8 @@ def main() -> int:
             return cmd_get_global()
         if command == "enabled-ids":
             return cmd_enabled_ids()
+        if command == "inherit-ids":
+            return cmd_inherit_ids()
         if command == "repo":
             if len(sys.argv) != 3:
                 raise SystemExit("usage: config.py repo <id>")
@@ -426,6 +453,8 @@ def main() -> int:
         return cmd_get_global()
     if args.command == "enabled-ids":
         return cmd_enabled_ids()
+    if args.command == "inherit-ids":
+        return cmd_inherit_ids()
     if args.command == "view":
         return cmd_view()
     if args.command == "repo":

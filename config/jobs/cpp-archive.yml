@@ -1,0 +1,7 @@
+schema: jobs/v1
+version: 1
+schema_version: 1
+instances:
+- id: cpp-archive
+  enabled: true
+  schedule: "18:00"
