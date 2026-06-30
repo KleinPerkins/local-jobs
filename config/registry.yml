@@ -1,0 +1,30 @@
+# local-jobs registry (local-jobs/v1)
+# Job types define backends; instances are either listed here (singletons) or
+# discovered from backend config (e.g. incremental-git-fetch repos).
+
+version: 1
+
+discovery:
+  label_prefix: com.kleinperkins.
+
+job_types:
+  incremental-git-fetch:
+    description: Incremental filtered git fetch for vendor/reference repos under ~/dev
+    backend_home: ~/dev/personal/dev-fetch
+    handler: handlers/incremental-git-fetch.sh
+    multi_instance: true
+    launchd_label_prefix: com.kleinperkins.dev-fetch
+
+  cpp-archive:
+    description: Daily archive of committed cpp source refs to KleinPerkins/cpp
+    backend_home: ~/dev/personal/cpp
+    handler: handlers/cpp-archive.sh
+    multi_instance: false
+    launchd_label: com.kleinperkins.cpp-archive
+    default_instance_id: cpp-archive
+
+# Singleton instances registered with the framework (multi-instance types discover from backend)
+instances:
+  - id: cpp-archive
+    type: cpp-archive
+    enabled: true
