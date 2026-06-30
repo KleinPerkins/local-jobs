@@ -22,6 +22,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import contract  # noqa: E402
+import launchd  # noqa: E402
 
 HANDLER_TIMEOUT = float(os.environ.get("LOCAL_JOBS_HANDLER_TIMEOUT", "30"))
 
@@ -188,14 +189,9 @@ def managed_labels(reg: dict[str, Any], instances: list[dict[str, Any]] | None =
 
 
 def launchctl_loaded(label: str) -> bool:
-    uid = os.getuid()
-    proc = subprocess.run(
-        ["launchctl", "print", f"gui/{uid}/{label}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return proc.returncode == 0
+    # Delegate to the single launchd module so discovery honors
+    # LOCAL_JOBS_LAUNCHD_DISABLE and degrades gracefully without launchctl.
+    return launchd.is_loaded(label)
 
 
 def parse_plist_schedule(plist_path: Path) -> dict[str, Any]:
@@ -221,7 +217,9 @@ def parse_plist_schedule(plist_path: Path) -> dict[str, Any]:
 
 
 def discover_launchd(prefix: str) -> list[dict[str, Any]]:
-    agents_dir = Path.home() / "Library" / "LaunchAgents"
+    # Reuse launchd.agents_dir() so the sandbox (LOCAL_JOBS_LAUNCHAGENTS_DIR)
+    # is honored and discovery is hermetic.
+    agents_dir = launchd.agents_dir()
     found: list[dict[str, Any]] = []
     if not agents_dir.is_dir():
         return found

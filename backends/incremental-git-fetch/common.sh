@@ -71,5 +71,7 @@ PY
 }
 
 launchctl_loaded() {
+  [[ "${LOCAL_JOBS_LAUNCHD_DISABLE:-0}" == "1" ]] && return 1
+  command -v launchctl >/dev/null 2>&1 || return 1
   launchctl print "gui/$(id -u)/${LOCAL_JOBS_IGF_LABEL}" >/dev/null 2>&1
 }

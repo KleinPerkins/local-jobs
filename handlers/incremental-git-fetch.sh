@@ -37,7 +37,13 @@ USAGE
 }
 
 uid_domain() { printf 'gui/%s' "$(id -u)"; }
-is_loaded() { launchctl print "$(uid_domain)/$1" >/dev/null 2>&1; }
+# Honor the hermetic disable flag and degrade gracefully when launchctl is
+# absent (Linux CI), matching lib/launchd.py.
+is_loaded() {
+  [[ "${LOCAL_JOBS_LAUNCHD_DISABLE:-0}" == "1" ]] && return 1
+  command -v launchctl >/dev/null 2>&1 || return 1
+  launchctl print "$(uid_domain)/$1" >/dev/null 2>&1
+}
 
 parse_schedule() {
   local raw="$1"
@@ -87,8 +93,13 @@ global_loaded = os.environ["GLOBAL_LOADED"] == "true"
 uid = os.getuid()
 
 def loaded(label):
-    return subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
-                          capture_output=True).returncode == 0
+    if os.environ.get("LOCAL_JOBS_LAUNCHD_DISABLE", "0") == "1":
+        return False
+    try:
+        return subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
+                              capture_output=True).returncode == 0
+    except FileNotFoundError:  # no launchctl (e.g. Linux CI)
+        return False
 
 g = view.get("global") or {}
 launchd = g.get("launchd") or {}
@@ -403,13 +414,21 @@ case "${1:-}" in
     printf '== incremental-git-fetch doctor ==\n'
     if igf_config validate >/dev/null 2>&1; then printf 'config: ok (%s)\n' "$LOCAL_JOBS_IGF_CONFIG"; else printf 'config: INVALID\n'; issues=$((issues+1)); fi
     if "$LOCAL_JOBS_PYTHON" -c 'import yaml' 2>/dev/null; then printf 'PyYAML: ok (%s)\n' "$LOCAL_JOBS_PYTHON"; else printf 'PyYAML: MISSING under %s\n' "$LOCAL_JOBS_PYTHON"; issues=$((issues+1)); fi
-    for cmd in git lsof launchctl; do
+    for cmd in git lsof; do
       if command -v "$cmd" >/dev/null 2>&1; then printf '%s: ok\n' "$cmd"; else printf '%s: missing\n' "$cmd"; issues=$((issues+1)); fi
     done
+    # launchctl is macOS-only; only required when launchd is live (not hermetic).
+    if [[ "${LOCAL_JOBS_LAUNCHD_DISABLE:-0}" == "1" ]]; then
+      printf 'launchctl: skipped (launchd disabled)\n'
+    elif command -v launchctl >/dev/null 2>&1; then printf 'launchctl: ok\n'
+    else printf 'launchctl: missing\n'; issues=$((issues+1)); fi
     for s in config.py common.sh fetch-repo.sh run-all.sh install-launchd.sh uninstall-launchd.sh; do
       if [[ -e "$BACKEND/$s" ]]; then printf '%s: present\n' "$s"; else printf '%s: missing\n' "$s"; issues=$((issues+1)); fi
     done
-    if is_loaded "$LABEL_PREFIX"; then printf 'global agent: loaded (%s)\n' "$LABEL_PREFIX"; else printf 'global agent: not loaded (%s)\n' "$LABEL_PREFIX"; issues=$((issues+1)); fi
+    if [[ "${LOCAL_JOBS_LAUNCHD_DISABLE:-0}" == "1" ]]; then
+      printf 'global agent: skipped (launchd disabled)\n'
+    elif is_loaded "$LABEL_PREFIX"; then printf 'global agent: loaded (%s)\n' "$LABEL_PREFIX"
+    else printf 'global agent: not loaded (%s)\n' "$LABEL_PREFIX"; issues=$((issues+1)); fi
     doctor_status=PASS; (( issues == 0 )) || doctor_status=FAIL
     "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/events.py" emit --kind status --type incremental-git-fetch \
       --actor "${LOCAL_JOBS_ACTOR:-cli}" --payload "{\"check\":\"doctor\",\"status\":\"$doctor_status\",\"issues\":$issues}" >/dev/null 2>&1 || true

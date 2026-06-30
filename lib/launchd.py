@@ -108,26 +108,35 @@ def render_plist(spec: dict[str, Any]) -> str:
 def is_loaded(label: str) -> bool:
     if _disabled():
         return False
-    return (
-        subprocess.run(
-            ["launchctl", "print", f"{uid_domain()}/{label}"], capture_output=True
-        ).returncode
-        == 0
-    )
+    try:
+        return (
+            subprocess.run(
+                ["launchctl", "print", f"{uid_domain()}/{label}"], capture_output=True
+            ).returncode
+            == 0
+        )
+    except FileNotFoundError:  # no launchctl (e.g. Linux CI) — treat as not loaded
+        return False
 
 
 def bootout(label: str) -> None:
     if _disabled():
         return
-    subprocess.run(["launchctl", "bootout", f"{uid_domain()}/{label}"], capture_output=True)
+    try:
+        subprocess.run(["launchctl", "bootout", f"{uid_domain()}/{label}"], capture_output=True)
+    except FileNotFoundError:
+        return
 
 
 def bootstrap(plist: Path) -> int:
     if _disabled():
         return 0
-    return subprocess.run(
-        ["launchctl", "bootstrap", uid_domain(), str(plist)], capture_output=True
-    ).returncode
+    try:
+        return subprocess.run(
+            ["launchctl", "bootstrap", uid_domain(), str(plist)], capture_output=True
+        ).returncode
+    except FileNotFoundError:
+        return 0
 
 
 def write_plist(spec: dict[str, Any]) -> Path:
