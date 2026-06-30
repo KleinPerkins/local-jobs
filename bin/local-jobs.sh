@@ -22,7 +22,8 @@ Commands (aliases in parentheses):
   enable-job (enable)    Enable a job instance
   disable-job (disable)  Disable a job instance (keeps config)
   adopt-job (adopt)      Import an installed LaunchAgent as a managed command job
-  add-job-type           Scaffold a new ABI-conformant job type
+  add-job-type           Scaffold + register + verify a new ABI-conformant type
+  update-job-type        Migrate a type's instances forward (verify + regression)
   doctor                 Run health checks across all registered types
 
 Global options:
@@ -47,6 +48,7 @@ normalize_cmd() {
     disable|disable-job) printf 'disable' ;;
     adopt|adopt-job) printf 'adopt' ;;
     add-job-type) printf 'add-job-type' ;;
+    update-job-type) printf 'update-job-type' ;;
     doctor) printf 'doctor' ;;
     ""|-h|--help|help) printf 'help' ;;
     *) printf '%s' "$1" ;;
@@ -273,6 +275,7 @@ main() {
     disable) cmd_simple disable "$@" ;;
     adopt) "$SCRIPT_DIR/adopt-job.sh" "$@" ;;
     add-job-type) "$SCRIPT_DIR/add-job-type.sh" "$@" ;;
+    update-job-type) "$SCRIPT_DIR/update-job-type.sh" "$@" ;;
     doctor) cmd_doctor "$@" ;;
     *) die "unknown command: $verb" ;;
   esac
