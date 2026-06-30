@@ -52,18 +52,31 @@ program="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1
 [[ -n "$id" ]] || id="${label##*.}"
 schedule="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1]); print("%02d:%02d" % (int(d["hour"]), int(d["minute"])))' "$parsed")"
 
-# Build the command_store add args.
-add_args=(add --id "$id" --program "$program" --schedule "$schedule" --enabled true)
-while IFS= read -r a; do [[ -n "$a" ]] && add_args+=("--arg=$a"); done < <("$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(x) for x in json.loads(sys.argv[1])["args"]]' "$parsed")
-while IFS= read -r kv; do [[ -n "$kv" ]] && add_args+=("--env=$kv"); done < <("$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(f"{k}={v}") for k,v in json.loads(sys.argv[1])["env"].items()]' "$parsed")
+# Build the command-store entry through the chassis (contract + store), so the
+# `command` handler's declared schema and the generic store stay the single
+# source of truth (no bespoke command_store.py).
+COMMAND_CONFIG="${LOCAL_JOBS_COMMAND_CONFIG:-$LOCAL_JOBS_HOME/config/jobs/command.yml}"
+build_args=(--id "$id" --program "$program" --schedule "$schedule" --enabled true)
+while IFS= read -r a; do [[ -n "$a" ]] && build_args+=("--arg=$a"); done < <("$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(x) for x in json.loads(sys.argv[1])["args"]]' "$parsed")
+while IFS= read -r kv; do [[ -n "$kv" ]] && build_args+=("--env=$kv"); done < <("$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(f"{k}={v}") for k,v in json.loads(sys.argv[1])["env"].items()]' "$parsed")
+
+schema="$(registry_py add-schema --type command)"
+entry="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/contract.py" build-entry --schema "$schema" -- "${build_args[@]}")" \
+  || die "could not build command entry from $label"
+
+store_add() {
+  "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/store.py" --file "$COMMAND_CONFIG" --schema-version 1 \
+    --defaults '{"args":[],"env":{},"enabled":true}' --required '["program","schedule"]' \
+    add --entry "$entry" "$@"
+}
 
 if (( dry == 1 )); then
   printf 'would adopt %s as command id=%s schedule=%s program=%s\n' "$label" "$id" "$schedule" "$program"
-  "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/command_store.py" "${add_args[@]}" --dry-run
+  store_add --dry-run
   exit 0
 fi
 
-"$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/command_store.py" "${add_args[@]}"
+store_add >/dev/null
 log "adopted $label into command store as id=$id"
 
 if (( relabel == 1 )); then

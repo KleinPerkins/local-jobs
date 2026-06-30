@@ -225,6 +225,33 @@ cmd_doctor() {
     printf '\n== doctor: %s ==\n' "$t"
     dispatch_handler "$t" doctor || failed=1
   done < <(registry_py job-types)
+  # Cross-type drift scan: surface (and record as drift events) any instance
+  # whose loaded state disagrees with its enabled state, or any quarantined type.
+  printf '\n== doctor: drift scan ==\n'
+  local dash_json
+  dash_json="$(registry_py dashboard --json)"
+  DASH_JSON="$dash_json" LOCAL_JOBS_HOME="$LOCAL_JOBS_HOME" LOCAL_JOBS_PYTHON="$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_PYTHON" - <<'PY' || failed=1
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(os.environ["LOCAL_JOBS_HOME"]) / "lib"))
+import events  # noqa: E402
+payload = json.loads(os.environ["DASH_JSON"])
+issues = 0
+for inst in payload.get("instances", []):
+    if inst.get("role") == "error":
+        issues += 1
+        err = inst.get("error") or {}
+        print(f"  QUARANTINED: {inst.get('type')} — {err.get('reason')}")
+        events.emit("drift", job_type=inst.get("type"), payload={"kind": "quarantine", "reason": err.get("reason")})
+        continue
+    if inst.get("drift"):
+        issues += 1
+        print(f"  DRIFT: {inst.get('id')} ({inst.get('type')}) enabled={inst.get('enabled')} loaded={inst.get('launchd_loaded')}")
+        events.emit("drift", job_id=inst.get("id"), job_type=inst.get("type"),
+                    payload={"enabled": inst.get("enabled"), "loaded": inst.get("launchd_loaded")})
+print("  no drift" if issues == 0 else f"  {issues} drift/quarantine issue(s)")
+sys.exit(1 if issues else 0)
+PY
   return "$failed"
 }
 

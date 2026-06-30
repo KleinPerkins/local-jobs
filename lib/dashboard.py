@@ -8,44 +8,26 @@ point — jitter is runtime), drift detection, and parsed summaries.
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
+import events
 import registry
 import run_log
-
-
-def _next_at(hour: int, minute: int, now: datetime) -> datetime:
-    cand = now.replace(hour=hour % 24, minute=minute, second=0, microsecond=0)
-    if cand <= now:
-        cand += timedelta(days=1)
-    return cand
+import schedule as schedule_mod
 
 
 def _next_run(inst: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Next-run window via the single scheduler (LOCAL time — fixes the UTC
+    drift, P1-6). 'inherit' has no own window; it follows the global agent.
+    """
     sched = inst.get("schedule")
-    if inst.get("role") == "global_scheduler" and isinstance(sched, dict):
-        start_h = int(sched.get("window_start_hour", 18))
-        end_h = int(sched.get("window_end_hour", 24))
-        jitter = sched.get("use_jitter", True)
-        start = _next_at(start_h, 0, now)
-        end = start + timedelta(hours=(end_h - start_h))
-        return {
-            "window_start": start.isoformat(timespec="minutes"),
-            "window_end": end.isoformat(timespec="minutes"),
-            "basis": "jitter" if jitter else "fixed",
-        }
-    if isinstance(sched, str) and ":" in sched:
-        h, m = sched.split(":", 1)
-        at = _next_at(int(h), int(m), now)
-        return {"window_start": at.isoformat(timespec="minutes"),
-                "window_end": at.isoformat(timespec="minutes"), "basis": "fixed"}
-    if isinstance(sched, dict) and "hour" in sched:
-        at = _next_at(int(sched["hour"]), int(sched.get("minute", 0)), now)
-        return {"window_start": at.isoformat(timespec="minutes"),
-                "window_end": at.isoformat(timespec="minutes"), "basis": "fixed"}
-    # 'inherit' (per-repo following the global window) — basis says so.
-    return {"window_start": None, "window_end": None, "basis": "inherit"}
+    if sched in (None, "inherit"):
+        return {"window_start": None, "window_end": None, "basis": "inherit"}
+    try:
+        return schedule_mod.Schedule.parse(sched).next_run(now)
+    except (ValueError, KeyError, TypeError):
+        return {"window_start": None, "window_end": None, "basis": "unknown"}
 
 
 def _records_for(inst: dict[str, Any], all_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -76,7 +58,13 @@ def _run_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
         "series": series,
     }
     return {
-        "last_run": {"ts": last.get("ts"), "status": last.get("status"), "summary": last.get("summary")},
+        "last_run": {
+            "ts": last.get("ts"),
+            "status": last.get("status"),
+            "summary": last.get("summary"),
+            "rc": last.get("rc"),
+            "fields": last.get("fields") or {},  # full fidelity (P0-B): nothing dropped
+        },
         "last_success_ts": last_success,
         "consecutive_failures": cf,
         "durations": agg,
@@ -84,7 +72,7 @@ def _run_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_dashboard(reg: dict[str, Any]) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now().astimezone()  # LOCAL, tz-aware (fixes UTC next-run drift)
     instances = registry.collect_instances(reg)
     records = run_log.read_records()
     prefix = (reg.get("discovery") or {}).get("label_prefix", "com.kleinperkins.")
@@ -94,11 +82,24 @@ def build_dashboard(reg: dict[str, Any]) -> dict[str, Any]:
 
     out_instances = []
     failing = 0
+    quarantined = 0
     for inst in instances:
+        # Quarantined (broken) types render as degraded — never crash the board,
+        # never claim a schedule/last-run they don't have.
+        if inst.get("role") == "error":
+            quarantined += 1
+            out_instances.append({
+                **inst,
+                "next_run": {"window_start": None, "window_end": None, "basis": "error"},
+                "run_stats": _run_stats([]),
+                "drift": False,
+            })
+            continue
         stats = _run_stats(_records_for(inst, records))
         enabled = inst.get("enabled", True)
         loaded = inst.get("launchd_loaded")
-        drift = bool(enabled and loaded is False)
+        # Drift both ways: enabled-but-not-loaded, and disabled-but-still-loaded.
+        drift = bool((enabled and loaded is False) or (not enabled and loaded is True))
         if stats["consecutive_failures"] > 0:
             failing += 1
         out_instances.append({
@@ -108,9 +109,9 @@ def build_dashboard(reg: dict[str, Any]) -> dict[str, Any]:
             "drift": drift,
         })
 
-    # Failing + drifted sort to the top.
+    # Quarantined, failing, and drifted sort to the top.
     out_instances.sort(key=lambda i: (
-        0 if (i["run_stats"]["consecutive_failures"] > 0 or i["drift"]) else 1,
+        0 if (i.get("role") == "error" or i["run_stats"]["consecutive_failures"] > 0 or i["drift"]) else 1,
         i.get("id") or "",
     ))
 
@@ -118,21 +119,30 @@ def build_dashboard(reg: dict[str, Any]) -> dict[str, Any]:
         "schema": "dashboard/v1",
         "generated_at": now.isoformat(timespec="seconds"),
         "summary": {
-            "total": len(out_instances),
+            "total": sum(1 for i in out_instances if i.get("role") != "error"),
             "failing": failing,
             "drifted": sum(1 for i in out_instances if i["drift"]),
+            "quarantined": quarantined,
             "unmanaged": len(unmanaged),
         },
         "instances": out_instances,
         "discovered_unmanaged": unmanaged,
+        "recent_events": list(reversed(events.recent(25))),  # newest first
     }
 
 
 def print_dashboard(payload: dict[str, Any]) -> None:
     s = payload["summary"]
     print(f"local-jobs dashboard — generated {payload['generated_at']}")
-    print(f"  {s['total']} jobs · {s['failing']} failing · {s['drifted']} drifted · {s['unmanaged']} unmanaged")
+    print(
+        f"  {s['total']} jobs · {s['failing']} failing · {s['drifted']} drifted · "
+        f"{s.get('quarantined', 0)} quarantined · {s['unmanaged']} unmanaged"
+    )
     for inst in payload["instances"]:
+        if inst.get("role") == "error":
+            err = inst.get("error") or {}
+            print(f"  - {inst.get('type')} [QUARANTINED]: {err.get('reason')} (verb={err.get('verb')})")
+            continue
         rs = inst["run_stats"]
         last = rs["last_run"]
         last_s = f"{last['status']} — {last['summary']}" if last else "never run"

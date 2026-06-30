@@ -25,12 +25,19 @@ personal/local-jobs/                            # framework runtime (git-tracked
 │   ├── adopt-job.sh                             # import an installed agent
 │   ├── add-job-type.sh                          # scaffold a new type
 │   └── test-local-jobs.sh                       # ABI conformance harness
-├── lib/
-│   ├── registry.py                              # discovery via handler ABI
+├── lib/                                         # the type-agnostic chassis
+│   ├── registry.py                              # discovery via handler ABI (failure-isolated)
+│   ├── contract.py                              # describe/instance validation + quarantine
+│   ├── launchd.py                               # the single escaped plist writer + verify-load
+│   ├── schedule.py                              # one Schedule type (local next-run, full-window jitter)
+│   ├── store.py                                 # generic id-keyed CRUD (jobs/v1)
+│   ├── migrate.py                               # load-time forward migration (re-merge defaults)
+│   ├── handler_runtime.py                       # generic instance projection + launchd install
+│   ├── handler_lib.sh                           # bash chassis: every generic verb for thin handlers
+│   ├── events.py                                # uniform versioned event stream (event/v1)
 │   ├── dashboard.py                             # rich dashboard payload
-│   ├── run_log.py                               # runs.jsonl (runlog/v1)
+│   ├── run_log.py                               # run history (runlog/v1), the run slice of events
 │   ├── summarize.py                             # structured fields → headline
-│   ├── command_store.py                         # CRUD for command instances
 │   ├── flock.py                                 # portable per-repo lock
 │   └── common.sh
 ├── handlers/                                     # type plugins (ABI v1)

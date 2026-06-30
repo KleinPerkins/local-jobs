@@ -410,6 +410,9 @@ case "${1:-}" in
       if [[ -e "$BACKEND/$s" ]]; then printf '%s: present\n' "$s"; else printf '%s: missing\n' "$s"; issues=$((issues+1)); fi
     done
     if is_loaded "$LABEL_PREFIX"; then printf 'global agent: loaded (%s)\n' "$LABEL_PREFIX"; else printf 'global agent: not loaded (%s)\n' "$LABEL_PREFIX"; issues=$((issues+1)); fi
+    doctor_status=PASS; (( issues == 0 )) || doctor_status=FAIL
+    "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/events.py" emit --kind status --type incremental-git-fetch \
+      --actor "${LOCAL_JOBS_ACTOR:-cli}" --payload "{\"check\":\"doctor\",\"status\":\"$doctor_status\",\"issues\":$issues}" >/dev/null 2>&1 || true
     if (( issues == 0 )); then printf 'doctor: PASS\n'; else printf 'doctor: FAIL (%s)\n' "$issues"; exit 1; fi
     ;;
   ""|-h|--help) usage; exit 2 ;;

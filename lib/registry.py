@@ -20,6 +20,11 @@ from typing import Any
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import contract  # noqa: E402
+
+HANDLER_TIMEOUT = float(os.environ.get("LOCAL_JOBS_HANDLER_TIMEOUT", "30"))
+
 
 def jobs_home() -> Path:
     env = os.environ.get("LOCAL_JOBS_HOME", "")
@@ -65,14 +70,68 @@ def handler_path(job_type: str, reg: dict[str, Any] | None = None) -> Path:
     return path
 
 
-def _run_handler(job_type: str, args: list[str], reg: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+def _run_handler(
+    job_type: str, args: list[str], reg: dict[str, Any], timeout: float = HANDLER_TIMEOUT
+) -> subprocess.CompletedProcess[str]:
     handler = handler_path(job_type, reg)
     return subprocess.run(
         [str(handler), *args],
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
+
+
+def _tail(text: str, n: int = 500) -> str:
+    return (text or "").strip()[-n:]
+
+
+def collect_for_type(job_type: str, reg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Instances for one type, fully isolated: any failure (non-zero rc, bad
+    JSON, contract-invalid, timeout, missing handler) yields exactly ONE
+    quarantine row instead of crashing the whole view or silently vanishing.
+    """
+    try:
+        dproc = _run_handler(job_type, ["describe"], reg)
+        if dproc.returncode != 0:
+            return [contract.quarantine_row(job_type, "describe failed", _tail(dproc.stderr), "describe", dproc.returncode)]
+        try:
+            desc = json.loads(dproc.stdout or "null")
+        except json.JSONDecodeError as exc:
+            return [contract.quarantine_row(job_type, f"describe emitted non-JSON: {exc}", _tail(dproc.stdout), "describe")]
+        derrs = contract.validate_describe(desc)
+        if derrs:
+            return [contract.quarantine_row(job_type, "invalid describe: " + "; ".join(derrs), _tail(dproc.stdout), "describe")]
+
+        lproc = _run_handler(job_type, ["list-instances"], reg)
+        if lproc.returncode != 0:
+            return [contract.quarantine_row(job_type, "list-instances failed", _tail(lproc.stderr), "list-instances", lproc.returncode)]
+        try:
+            data = json.loads(lproc.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            return [contract.quarantine_row(job_type, f"list-instances emitted non-JSON: {exc}", _tail(lproc.stdout), "list-instances")]
+        if not isinstance(data, list):
+            return [contract.quarantine_row(job_type, "list-instances did not return a JSON array", _tail(lproc.stdout), "list-instances")]
+
+        out: list[dict[str, Any]] = []
+        invalid = 0
+        for inst in data:
+            ierrs = contract.validate_instance(inst)
+            if ierrs:
+                invalid += 1
+                continue
+            inst.setdefault("type", job_type)
+            out.append(inst)
+        if invalid:
+            out.append(contract.quarantine_row(job_type, f"{invalid} instance(s) failed contract validation", "", "list-instances"))
+        return out
+    except subprocess.TimeoutExpired:
+        return [contract.quarantine_row(job_type, f"handler timed out after {HANDLER_TIMEOUT:g}s", "", "list-instances")]
+    except SystemExit as exc:  # handler_path: missing handler/type
+        return [contract.quarantine_row(job_type, str(exc), "", "discover")]
+    except Exception as exc:  # never let one type break discovery
+        return [contract.quarantine_row(job_type, f"unexpected error: {exc}", "", "discover")]
 
 
 def handler_describe(job_type: str, reg: dict[str, Any]) -> dict[str, Any]:
@@ -97,12 +156,14 @@ def handler_list_instances(job_type: str, reg: dict[str, Any]) -> list[dict[str,
 
 
 def collect_instances(reg: dict[str, Any]) -> list[dict[str, Any]]:
+    """All instances across all types, with per-type failure isolation.
+
+    A broken type contributes a single ``role:"error"`` quarantine row rather
+    than crashing discovery or disappearing silently.
+    """
     instances: list[dict[str, Any]] = []
     for jtype in job_types(reg):
-        for inst in handler_list_instances(jtype, reg):
-            if isinstance(inst, dict):
-                inst.setdefault("type", jtype)
-                instances.append(inst)
+        instances.extend(collect_for_type(jtype, reg))
     return instances
 
 
@@ -208,6 +269,10 @@ def view_jobs(as_json: bool) -> int:
     print(f"registry: {payload['registry']}")
     print("\n== Managed instances ==")
     for inst in payload["instances"]:
+        if inst.get("role") == "error":
+            err = inst.get("error") or {}
+            print(f"  [QUARANTINED] {inst.get('type')} — {err.get('reason')} (verb={err.get('verb')})")
+            continue
         if inst.get("role") == "global_scheduler":
             print(
                 f"  [global] {inst.get('launchd_label')} "
