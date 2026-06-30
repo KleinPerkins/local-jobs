@@ -1,6 +1,9 @@
 # local-jobs
 
-Unified framework for managing locally scheduled macOS `launchd` jobs in the `~/dev` ecosystem.
+Unified, type-agnostic framework for managing locally scheduled macOS `launchd`
+jobs in the `~/dev` ecosystem. The core discovers job types from a registry and
+drives every handler through a uniform ABI — adding a new type never requires
+editing the core.
 
 ## Architecture
 
@@ -8,69 +11,102 @@ Unified framework for managing locally scheduled macOS `launchd` jobs in the `~/
 capabilities/skills/global/skills/local-jobs/   # IDE skill (user-facing)
         │
         ▼
-personal/local-jobs/                            # framework runtime
-├── config/registry.yml                         # job types + singleton instances
-├── bin/local-jobs.sh                           # unified CLI
-├── lib/registry.py                             # discovery + view aggregation
-└── handlers/                                   # type plugins → backend repos
-    ├── incremental-git-fetch.sh  → personal/dev-fetch
-    └── cpp-archive.sh            → personal/cpp
+personal/local-jobs/                            # framework runtime (git-tracked: KleinPerkins/local-jobs)
+├── ABI.md                                       # the handler contract (abi/v1)
+├── config/
+│   ├── registry.yml                             # job types (registry/v1)
+│   └── jobs/                                     # per-type instance config (jobs/v1)
+│       ├── incremental-git-fetch.yml
+│       └── command.yml
+├── bin/
+│   ├── local-jobs.sh                            # unified CLI (type-agnostic)
+│   ├── dispatch-run.sh                          # wraps handler `run`, writes runs.jsonl
+│   ├── run-scheduled.sh                         # launchd entrypoint (adds igf jitter)
+│   ├── adopt-job.sh                             # import an installed agent
+│   ├── add-job-type.sh                          # scaffold a new type
+│   └── test-local-jobs.sh                       # ABI conformance harness
+├── lib/
+│   ├── registry.py                              # discovery via handler ABI
+│   ├── dashboard.py                             # rich dashboard payload
+│   ├── run_log.py                               # runs.jsonl (runlog/v1)
+│   ├── summarize.py                             # structured fields → headline
+│   ├── command_store.py                         # CRUD for command instances
+│   ├── flock.py                                 # portable per-repo lock
+│   └── common.sh
+├── handlers/                                     # type plugins (ABI v1)
+│   ├── incremental-git-fetch.sh
+│   ├── cpp-archive.sh
+│   └── command.sh
+└── backends/
+    └── incremental-git-fetch/                    # absorbed fetch backend (first-class)
 ```
 
-**Job types** define a backend repo and handler plugin. **Instances** are either:
+## Handler ABI
 
-- Listed in `registry.yml` (singletons like `cpp-archive`), or
-- Discovered from backend config (`incremental-git-fetch` repos in `dev-fetch/config/repos.yml`)
-
-The framework also **discovers** all `com.kleinperkins.*` LaunchAgents on the machine and reports unmanaged ones in `view-jobs`.
+Every type is a handler at `handlers/<type>.sh` implementing the verbs
+`describe · list-instances · view · run · logs · add · update · delete ·
+enable · disable · repair · doctor`. See [`ABI.md`](ABI.md).
 
 ## CLI
 
 ```bash
-~/dev/personal/local-jobs/bin/local-jobs.sh view-jobs
-~/dev/personal/local-jobs/bin/local-jobs.sh view-jobs --json
-~/dev/personal/local-jobs/bin/local-jobs.sh doctor
+~/dev/personal/local-jobs/bin/local-jobs.sh view-jobs            # all instances + unmanaged agents
+~/dev/personal/local-jobs/bin/local-jobs.sh dashboard --json     # rich payload (canvas feed)
+~/dev/personal/local-jobs/bin/local-jobs.sh doctor               # health across every type
+~/dev/personal/local-jobs/bin/local-jobs.sh run-job --id <id>    # run now (logs to runs.jsonl)
+~/dev/personal/local-jobs/bin/local-jobs.sh logs-job --id <id>
 ~/dev/personal/local-jobs/bin/local-jobs.sh repair-job --all
 
-# incremental-git-fetch
+# incremental-git-fetch (absorbed backend)
 ~/dev/personal/local-jobs/bin/local-jobs.sh add-job \
   --type incremental-git-fetch --id foo --path affirm/vendor/foo --branch main
 ~/dev/personal/local-jobs/bin/local-jobs.sh update-job --id foo --schedule 20:00
-~/dev/personal/local-jobs/bin/local-jobs.sh update-job --id foo --enabled false
 ~/dev/personal/local-jobs/bin/local-jobs.sh delete-job --id foo --confirm
-~/dev/personal/local-jobs/bin/local-jobs.sh repair-job --id foo
 
-# cpp-archive (singleton)
-~/dev/personal/local-jobs/bin/local-jobs.sh repair-job --id cpp-archive
-~/dev/personal/local-jobs/bin/local-jobs.sh update-job --id cpp-archive --schedule 18:00
-```
+# generic command type (arbitrary program + schedule, self-managed plist)
+~/dev/personal/local-jobs/bin/local-jobs.sh add-job \
+  --type command --id backup --program /path/script.sh --schedule 02:00 --arg=--flag --env=K=V
 
-IDE agents use the **local-jobs** skill:
-
-```bash
-bash ~/.cursor/skills/local-jobs/scripts/local-jobs.sh view-jobs
+# adopt an existing installed agent into the registry
+~/dev/personal/local-jobs/bin/local-jobs.sh adopt-job --label com.kleinperkins.something [--relabel --confirm]
 ```
 
 ## Registered job types
 
 | Type | Backend | Launchd label(s) |
 |------|---------|------------------|
-| `incremental-git-fetch` | `personal/dev-fetch` | `com.kleinperkins.dev-fetch` (+ per-repo suffix) |
-| `cpp-archive` | `personal/cpp` | `com.kleinperkins.cpp-archive` |
+| `incremental-git-fetch` | `backends/incremental-git-fetch` | `com.kleinperkins.local-jobs.git-fetch` (+ `.<id>` per repo) |
+| `cpp-archive` | `personal/cpp` (source unchanged) | `com.kleinperkins.local-jobs.cpp-archive` |
+| `command` | self-managed (no backend) | `com.kleinperkins.local-jobs.command.<id>` |
+
+## Run history
+
+`run-job` and every scheduled agent dispatch through `dispatch-run.sh`, which
+captures the handler's single `@@RUNLOG@@` line, computes a summary, and appends
+one `runlog/v1` record to `~/.local-jobs/runs.jsonl` (flock-guarded, capped per
+line, size/age-rotated, malformed-tolerant).
 
 ## Adding a new job type
 
-1. Create backend repo with `install-launchd.sh`, logs under `~/Library/Logs/`, label `com.kleinperkins.<name>`.
-2. Add handler script under `handlers/<type>.sh` implementing: `view`, `add`, `update`, `delete`, `repair`, `enable`, `disable`, `doctor`.
-3. Register in `config/registry.yml` under `job_types`.
-4. Add singleton to `instances` if applicable.
+```bash
+bin/add-job-type.sh --type my-type --cardinality multi --description "..."
+# then implement the ABI verbs in handlers/my-type.sh and register it in config/registry.yml
+```
 
-## Deprecations
+## Schedule (incremental-git-fetch)
 
-- **`dev-fetch` skill** — replaced by `local-jobs` (dev-fetch remains the backend).
-- **`cpp-archive` skill** — replaced by `local-jobs` (cpp remains the backend).
+Global agent triggers daily at `window_start_hour` (default 18:00) and the
+runner sleeps a random jitter up to `window_end_hour` (default 24:00). Per-repo
+fixed schedules use `schedule: {hour, minute}` and a dedicated `.<id>` agent
+(no jitter). Manual `run-job` skips jitter.
 
 ## Dependencies
 
 - `python3` with PyYAML (`python3 -m pip install --user pyyaml`)
-- `launchctl`, `git`
+- `launchctl`, `git`, `lsof`
+
+## Git tracking
+
+This framework is its own repo (`KleinPerkins/local-jobs`) with the standard
+KleinPerkins noreply identity + commit guards, so the absorbed backend and run
+history are durably tracked.

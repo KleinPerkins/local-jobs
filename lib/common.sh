@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Shared helpers for local-jobs framework.
+# Shared helpers for the local-jobs framework.
 set -euo pipefail
 
-LOCAL_JOBS_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_JOBS_HOME="${LOCAL_JOBS_HOME:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOCAL_JOBS_REGISTRY="${LOCAL_JOBS_REGISTRY:-$LOCAL_JOBS_HOME/config/registry.yml}"
 LOCAL_JOBS_STATE="${LOCAL_JOBS_STATE:-$HOME/.local-jobs}"
+# Pin one interpreter for the whole framework (Phase 5). launchd plists export a
+# PATH that puts the homebrew python3 (with PyYAML) first.
+LOCAL_JOBS_PYTHON="${LOCAL_JOBS_PYTHON:-python3}"
 
 log() {
   printf '[local-jobs] %s\n' "$*"
@@ -23,14 +26,14 @@ expand_path() {
   local raw="$1"
   case "$raw" in
     "~/"*) printf '%s\n' "${raw/#\~/$HOME}" ;;
-    *) printf '%s\n' "$(python3 -c 'import os,sys; print(os.path.expanduser(sys.argv[1]))' "$raw")" ;;
+    *) printf '%s\n' "$("$LOCAL_JOBS_PYTHON" -c 'import os,sys; print(os.path.expanduser(sys.argv[1]))' "$raw")" ;;
   esac
 }
 
 registry_py() {
   LOCAL_JOBS_REGISTRY="$LOCAL_JOBS_REGISTRY" \
   LOCAL_JOBS_HOME="$LOCAL_JOBS_HOME" \
-    python3 "$LOCAL_JOBS_HOME/lib/registry.py" "$@"
+    "$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/registry.py" "$@"
 }
 
 handler_for_type() {

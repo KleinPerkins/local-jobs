@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unified CLI for locally scheduled launchd jobs.
+# Unified, type-agnostic CLI for locally scheduled launchd jobs.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,150 +12,169 @@ Usage: local-jobs.sh <command> [options]
 
 Commands (aliases in parentheses):
   view-jobs (view)       List managed instances + discovered com.kleinperkins.* agents
-  add-job (add)          Add a job instance
+  dashboard              Rich status payload (use --json for the canvas feed)
+  add-job (add)          Add a job instance (--type <t> --id <id> [type-specific flags])
   update-job (update)    Update schedule and/or enabled state
   delete-job (delete)    Remove a job instance (requires --confirm)
+  run-job (run)          Run a job now (--id <id> | --all) [--dry-run]
+  logs-job (logs)        Show log paths + tails (--id <id> [--tail N])
   repair-job (repair)    Idempotent repair for one or all managed jobs
   enable-job (enable)    Enable a job instance
   disable-job (disable)  Disable a job instance (keeps config)
-  doctor                 Run health checks for managed backends
-
-add-job:
-  --type <job-type> --id <id> [type-specific options]
-  incremental-git-fetch: --path <path> --branch <branch> [--schedule inherit|HH:MM] [--enabled true|false]
-
-update-job:
-  --id <id> [--schedule HH:MM|inherit] [--enabled true|false]
-  --id __global__ --schedule HH:MM   (incremental-git-fetch global window start)
-
-delete-job:
-  --id <id> --confirm [--purge-launchd]   (incremental-git-fetch per-repo agents)
-
-repair-job:
-  [--id <id>] [--all]
+  adopt-job (adopt)      Import an installed LaunchAgent as a managed command job
+  add-job-type           Scaffold a new ABI-conformant job type
+  doctor                 Run health checks across all registered types
 
 Global options:
-  --json                 JSON output (view-jobs)
-  --type <job-type>      Required for add-job; optional hint for repair
+  --json                 JSON output (view-jobs, dashboard)
+  --type <job-type>      Required for add-job; optional hint elsewhere
+
+Run 'add-job --type <t>' flags via: registry add_schema (see ABI.md).
 USAGE
 }
 
 normalize_cmd() {
   case "${1:-}" in
     view|view-jobs) printf 'view' ;;
+    dashboard) printf 'dashboard' ;;
     add|add-job) printf 'add' ;;
     update|update-job) printf 'update' ;;
     delete|delete-job) printf 'delete' ;;
+    run|run-job) printf 'run' ;;
+    logs|logs-job) printf 'logs' ;;
     repair|repair-job) printf 'repair' ;;
     enable|enable-job) printf 'enable' ;;
     disable|disable-job) printf 'disable' ;;
+    adopt|adopt-job) printf 'adopt' ;;
+    add-job-type) printf 'add-job-type' ;;
     doctor) printf 'doctor' ;;
     ""|-h|--help|help) printf 'help' ;;
     *) printf '%s' "$1" ;;
   esac
 }
 
-invoke_handler() {
-  local job_type="$1"
-  shift
+dispatch_handler() {
+  local job_type="$1"; shift
   local handler
   handler="$(require_handler "$job_type")"
   "$handler" "$@"
 }
 
-dispatch_handler() {
-  invoke_handler "$@"
-}
-
 cmd_view() {
   local json=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --json) json=1 ;;
-      *) die "unknown view option: $1" ;;
-    esac
-    shift
-  done
-  if (( json == 1 )); then
-    registry_py view --json
-  else
-    registry_py view
-  fi
+  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1 ;; *) die "unknown view option: $1" ;; esac; shift; done
+  if (( json == 1 )); then registry_py view --json; else registry_py view; fi
+}
+
+cmd_dashboard() {
+  local json=0
+  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1 ;; *) die "unknown dashboard option: $1" ;; esac; shift; done
+  if (( json == 1 )); then registry_py dashboard --json; else registry_py dashboard; fi
 }
 
 cmd_add() {
-  local job_type="" id="" path="" branch="" schedule="inherit" enabled="true"
+  local job_type="" id="" passthrough=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --type) shift; job_type="${1:-}" ;;
-      --id) shift; id="${1:-}" ;;
-      --path) shift; path="${1:-}" ;;
-      --branch) shift; branch="${1:-}" ;;
-      --schedule) shift; schedule="${1:-}" ;;
-      --enabled) shift; enabled="${1:-}" ;;
-      *) die "unknown add option: $1" ;;
+      --id) shift; id="${1:-}"; passthrough+=(--id "$id") ;;
+      --*) # generic flag passthrough; consume an optional value
+        local flag="$1"
+        if [[ $# -ge 2 && "${2:-}" != --* ]]; then shift; passthrough+=("$flag" "$1"); else passthrough+=("$flag"); fi
+        ;;
+      *) die "unknown add token: $1" ;;
     esac
     shift
   done
   [[ -n "$job_type" ]] || die "add-job requires --type"
-  case "$job_type" in
-    incremental-git-fetch)
-      [[ -n "$id" && -n "$path" && -n "$branch" ]] || die "incremental-git-fetch add requires --id --path --branch"
-      dispatch_handler "$job_type" add --id "$id" --path "$path" --branch "$branch" \
-        --schedule "$schedule" --enabled "$enabled"
-      ;;
-    cpp-archive)
-      [[ -z "$id" || "$id" == "cpp-archive" ]] || die "cpp-archive is a singleton (id: cpp-archive)"
-      dispatch_handler "$job_type" add
-      ;;
-    *)
-      die "unknown job type: $job_type"
-      ;;
-  esac
+  # Validate required flags from the handler's declared add_schema.
+  local missing
+  missing="$(registry_py add-schema --type "$job_type" | LJ_ARGS="${passthrough[*]}" "$LOCAL_JOBS_PYTHON" -c '
+import json, os, sys
+schema = json.load(sys.stdin)
+have = set(os.environ.get("LJ_ARGS", "").split())
+miss = [f["flag"] for f in schema if f.get("required") and f["flag"] not in have]
+print(" ".join(miss))')"
+  [[ -z "$missing" ]] || die "add-job --type $job_type missing required flags: $missing"
+  dispatch_handler "$job_type" add "${passthrough[@]}"
 }
 
 cmd_update() {
-  local id="" schedule="" enabled="" job_type=""
+  local id="" job_type="" rest=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --id) shift; id="${1:-}" ;;
+      --id) shift; id="${1:-}"; rest+=(--id "$id") ;;
       --type) shift; job_type="${1:-}" ;;
-      --schedule) shift; schedule="${1:-}" ;;
-      --enabled) shift; enabled="${1:-}" ;;
-      *) die "unknown update option: $1" ;;
+      --*) local flag="$1"; if [[ $# -ge 2 && "${2:-}" != --* ]]; then shift; rest+=("$flag" "$1"); else rest+=("$flag"); fi ;;
+      *) die "unknown update token: $1" ;;
     esac
     shift
   done
   [[ -n "$id" ]] || die "update-job requires --id"
-  if [[ -z "$job_type" ]]; then
-    job_type="$(resolve_instance_type "$id")"
-  fi
-  local args=(update --id "$id")
-  [[ -n "$schedule" ]] && args+=(--schedule "$schedule")
-  [[ -n "$enabled" ]] && args+=(--enabled "$enabled")
-  dispatch_handler "$job_type" "${args[@]}"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  dispatch_handler "$job_type" update "${rest[@]}"
 }
 
 cmd_delete() {
-  local id="" confirm=0 purge=0 job_type=""
+  local id="" job_type="" rest=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --id) shift; id="${1:-}" ;;
+      --id) shift; id="${1:-}"; rest+=(--id "$id") ;;
       --type) shift; job_type="${1:-}" ;;
-      --confirm) confirm=1 ;;
-      --purge-launchd) purge=1 ;;
+      --confirm) rest+=(--confirm) ;;
+      --purge-launchd) rest+=(--purge-launchd) ;;
       *) die "unknown delete option: $1" ;;
     esac
     shift
   done
   [[ -n "$id" ]] || die "delete-job requires --id"
-  (( confirm == 1 )) || die "delete-job requires --confirm"
-  if [[ -z "$job_type" ]]; then
-    job_type="$(resolve_instance_type "$id")"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  dispatch_handler "$job_type" delete "${rest[@]}"
+}
+
+cmd_run() {
+  local id="" all=0 dry=0 job_type=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id) shift; id="${1:-}" ;;
+      --type) shift; job_type="${1:-}" ;;
+      --all) all=1 ;;
+      --dry-run) dry=1 ;;
+      *) die "unknown run option: $1" ;;
+    esac
+    shift
+  done
+  if (( all == 1 )); then
+    local t
+    while IFS= read -r t; do
+      [[ -n "$t" ]] || continue
+      printf '\n== run: %s ==\n' "$t"
+      "$SCRIPT_DIR/dispatch-run.sh" --type "$t" $([[ $dry -eq 1 ]] && printf -- '--dry-run') || true
+    done < <(registry_py job-types)
+    return 0
   fi
-  local args=(delete --id "$id" --confirm)
-  (( purge == 1 )) && args+=(--purge-launchd)
-  dispatch_handler "$job_type" "${args[@]}"
+  [[ -n "$id" ]] || die "run-job requires --id or --all"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  local args=(--type "$job_type")
+  [[ "$id" != "__global__" && "$id" != "all" ]] && args+=(--id "$id")
+  (( dry == 1 )) && args+=(--dry-run)
+  "$SCRIPT_DIR/dispatch-run.sh" "${args[@]}"
+}
+
+cmd_logs() {
+  local id="" tail=40 job_type=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id) shift; id="${1:-}" ;;
+      --type) shift; job_type="${1:-}" ;;
+      --tail) shift; tail="${1:-40}" ;;
+      *) die "unknown logs option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "$id" ]] || die "logs-job requires --id"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  dispatch_handler "$job_type" logs --id "$id" --tail "$tail"
 }
 
 cmd_repair() {
@@ -170,56 +189,42 @@ cmd_repair() {
     shift
   done
   if (( all == 1 )); then
-    dispatch_handler incremental-git-fetch repair --all
-    dispatch_handler cpp-archive repair
-    return 0
+    local t failed=0
+    while IFS= read -r t; do
+      [[ -n "$t" ]] || continue
+      printf '\n== repair: %s ==\n' "$t"
+      dispatch_handler "$t" repair || failed=1
+    done < <(registry_py job-types)
+    return "$failed"
   fi
-  if [[ -n "$id" ]]; then
-    [[ -z "$job_type" ]] && job_type="$(resolve_instance_type "$id")"
-    dispatch_handler "$job_type" repair --id "$id"
-    return 0
-  fi
-  die "repair-job requires --id or --all"
+  [[ -n "$id" ]] || die "repair-job requires --id or --all"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  dispatch_handler "$job_type" repair --id "$id"
 }
 
-cmd_enable() {
+cmd_simple() { # enable/disable
+  local verb="$1"; shift
   local id="" job_type=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --id) shift; id="${1:-}" ;;
       --type) shift; job_type="${1:-}" ;;
-      *) die "unknown enable option: $1" ;;
+      *) die "unknown $verb option: $1" ;;
     esac
     shift
   done
-  [[ -n "$id" ]] || die "enable-job requires --id"
-  [[ -z "$job_type" ]] && job_type="$(resolve_instance_type "$id")"
-  dispatch_handler "$job_type" enable --id "$id"
-}
-
-cmd_disable() {
-  local id="" job_type=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --id) shift; id="${1:-}" ;;
-      --type) shift; job_type="${1:-}" ;;
-      *) die "unknown disable option: $1" ;;
-    esac
-    shift
-  done
-  [[ -n "$id" ]] || die "disable-job requires --id"
-  [[ -z "$job_type" ]] && job_type="$(resolve_instance_type "$id")"
-  dispatch_handler "$job_type" disable --id "$id"
+  [[ -n "$id" ]] || die "$verb-job requires --id"
+  [[ -n "$job_type" ]] || job_type="$(resolve_instance_type "$id")"
+  dispatch_handler "$job_type" "$verb" --id "$id"
 }
 
 cmd_doctor() {
-  local failed=0
-  for t in incremental-git-fetch cpp-archive; do
+  local failed=0 t
+  while IFS= read -r t; do
+    [[ -n "$t" ]] || continue
     printf '\n== doctor: %s ==\n' "$t"
-    if ! invoke_handler "$t" doctor; then
-      failed=1
-    fi
-  done
+    dispatch_handler "$t" doctor || failed=1
+  done < <(registry_py job-types)
   return "$failed"
 }
 
@@ -228,20 +233,21 @@ main() {
   verb="$(normalize_cmd "${1:-}")"
   shift || true
   case "$verb" in
-    help)
-      usage
-      ;;
+    help) usage ;;
     view) cmd_view "$@" ;;
+    dashboard) cmd_dashboard "$@" ;;
     add) cmd_add "$@" ;;
     update) cmd_update "$@" ;;
     delete) cmd_delete "$@" ;;
+    run) cmd_run "$@" ;;
+    logs) cmd_logs "$@" ;;
     repair) cmd_repair "$@" ;;
-    enable) cmd_enable "$@" ;;
-    disable) cmd_disable "$@" ;;
+    enable) cmd_simple enable "$@" ;;
+    disable) cmd_simple disable "$@" ;;
+    adopt) "$SCRIPT_DIR/adopt-job.sh" "$@" ;;
+    add-job-type) "$SCRIPT_DIR/add-job-type.sh" "$@" ;;
     doctor) cmd_doctor "$@" ;;
-    *)
-      die "unknown command: $verb"
-      ;;
+    *) die "unknown command: $verb" ;;
   esac
 }
 
