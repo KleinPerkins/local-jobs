@@ -1,8 +1,8 @@
 name: conformance
 
-# Hermetic conformance + type-evolution regression for the local-jobs framework.
-# The harness sandboxes all state and sets LOCAL_JOBS_LAUNCHD_DISABLE=1, so it
-# never needs macOS/launchctl and runs on Linux runners.
+# Overlay smoke checks for the local-jobs operator-private companion repo.
+# The full overlay-vs-global integration harness runs locally where the sibling
+# private global skills checkout is available.
 
 on:
   push:
@@ -22,13 +22,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install PyYAML
-        run: python -m pip install --upgrade pip pyyaml
-
-      - name: Git identity for sandbox repos
+      - name: Overlay static smoke
         run: |
-          git config --global user.email "ci@local-jobs.test"
-          git config --global user.name "local-jobs ci"
-
-      - name: Hermetic conformance + regression (full)
-        run: bash bin/test-local-jobs.sh full
+          bash -n install-overlay.sh
+          bash -n bin/test-local-overlay.sh
+          bash -n handlers/cpp-archive.sh
+          python - <<'PY'
+          data = {}
+          with open("overlay/registry.d/cpp-archive.yml", "r", encoding="utf-8") as fh:
+              for line in fh:
+                  if ":" in line:
+                      k, v = line.split(":", 1)
+                      data[k.strip()] = v.strip().strip('"')
+          assert data["id"] == "cpp-archive"
+          assert data["handler"] == "__INSTALLED_BY_INSTALL_OVERLAY__"
+          PY
