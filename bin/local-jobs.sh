@@ -104,14 +104,12 @@ cmd_add() {
     fi
   fi
   # Validate required flags from the handler's declared add_schema.
-  local missing
-  missing="$(registry_py add-schema --type "$job_type" | LJ_ARGS="${passthrough[*]}" "$LOCAL_JOBS_PYTHON" -c '
-import json, os, sys
-schema = json.load(sys.stdin)
-have = set(os.environ.get("LJ_ARGS", "").split())
-miss = [f["flag"] for f in schema if f.get("required") and f["flag"] not in have]
-print(" ".join(miss))')"
-  [[ -z "$missing" ]] || die "add-job --type $job_type missing required flags: $missing"
+  local schema missing
+  schema="$(registry_py add-schema --type "$job_type")"
+  missing="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/contract.py" missing-required --schema "$schema" -- "${passthrough[@]}" 2>&1)" || {
+    [[ -n "$missing" ]] && die "add-job --type $job_type missing required flags: $missing"
+    die "add-job --type $job_type: invalid flags"
+  }
   dispatch_handler "$job_type" add "${passthrough[@]}"
 }
 

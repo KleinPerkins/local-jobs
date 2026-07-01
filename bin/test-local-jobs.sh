@@ -206,6 +206,60 @@ PY
   CLI delete-job --type command --id shared --confirm >/dev/null 2>&1 || true
 }
 
+# ---- repair converges disabled instances (no lingering plist drift) ----------
+test_repair_disabled_drift() {
+  echo "== repair disabled drift convergence =="
+  local cid="driftjob"
+  local plist="$SB/agents/com.kleinperkins.local-jobs.command.${cid}.plist"
+  CLI add-job --type command --id "$cid" --program /bin/echo --arg=x --schedule 04:04 >/dev/null 2>&1 && ok "drift seed add" || bad "drift seed add"
+  CLI enable-job --id "$cid" >/dev/null 2>&1
+  [[ -f "$plist" ]] && ok "enable wrote plist" || bad "enable plist missing"
+  CLI disable-job --id "$cid" >/dev/null 2>&1
+  [[ ! -f "$plist" ]] && ok "disable removed plist" || bad "disable left plist"
+  # Simulate drift: agent plist reappears while instance stays disabled.
+  printf '%s\n' '<plist version="1.0"><dict/></plist>' > "$plist"
+  CLI repair-job --id "$cid" >/dev/null 2>&1 && ok "repair disabled id" || bad "repair disabled id"
+  [[ ! -f "$plist" ]] && ok "repair purged drift plist" || bad "repair left drift plist"
+  CLI delete-job --id "$cid" --confirm >/dev/null 2>&1 || true
+}
+
+# ---- run-log dedup across legacy + event stream -----------------------------
+test_runlog_dedup() {
+  echo "== run-log dedup =="
+  local ts="2026-06-30T12:00:00+00:00"
+  printf '{"schema":"event/v1","ts":"%s","kind":"run","job_id":"dedup","type":"command","payload":{"status":"success","duration_s":1,"rc":0,"summary":"ok","fields":{}}}\n' "$ts" \
+    >> "$SB/state/runs.jsonl"
+  printf '{"schema":"event/v1","ts":"%s","kind":"run","job_id":"dedup","type":"command","payload":{"status":"success","duration_s":1,"rc":0,"summary":"ok","fields":{}}}\n' "$ts" \
+    >> "$SB/state/events.jsonl"
+  cnt="$("$PY" "$SB/lib/run_log.py" recent --limit 50 --id dedup | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  [[ "$cnt" == "1" ]] && ok "run-log dedupes legacy+events" || bad "run-log dup count=$cnt"
+}
+
+# ---- add-job validates --flag=value required tokens -------------------------
+test_add_flag_equals() {
+  echo "== add-job --flag=value required check =="
+  rc=0; out="$(CLI add-job --type command --id=bare --schedule=05:05 2>&1)" || rc=$?
+  if [[ $rc -ne 0 && "$out" == *"missing required"* ]]; then ok "add-job rejects missing --program (inline flags)"; else bad "inline-flag required check (rc=$rc)"; fi
+}
+
+# ---- adopt-job rejects duplicate global ids ----------------------------------
+test_adopt_id_guard() {
+  echo "== adopt-job global id guard =="
+  local fake="$SB/agents/com.example.fake.plist"
+  mkdir -p "$SB/agents"
+  cat > "$fake" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.example.fake</string>
+  <key>ProgramArguments</key><array><string>/bin/echo</string><string>x</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>3</integer></dict>
+</dict></plist>
+PLIST
+  rc=0; out="$(CLI adopt-job --label com.example.fake --id demo 2>&1)" || rc=$?
+  if [[ $rc -ne 0 && "$out" == *"already exists"* ]]; then ok "adopt rejects duplicate id"; else bad "adopt dup guard (rc=$rc out=$out)"; fi
+}
+
 # ---- quarantine: a broken type must not crash view/dashboard ---------------
 test_quarantine() {
   echo "== quarantine (broken type) =="
@@ -315,6 +369,10 @@ main() {
     test_cpp_archive; echo
     test_igf; echo
     test_id_uniqueness; echo
+    test_repair_disabled_drift; echo
+    test_runlog_dedup; echo
+    test_add_flag_equals; echo
+    test_adopt_id_guard; echo
     test_type_evolution; echo
     test_authoring_rollback; echo
   fi

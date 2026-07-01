@@ -375,18 +375,23 @@ case "${1:-}" in
     ;;
   repair)
     shift
-    while [[ $# -gt 0 ]]; do case "$1" in --id) shift ;; --all) ;; *) die "unknown repair option: $1" ;; esac; shift; done
+    repair_id=""
+    while [[ $# -gt 0 ]]; do case "$1" in --id) shift; repair_id="${1:-}" ;; --all) ;; *) die "unknown repair option: $1" ;; esac; shift; done
     chmod +x "$BACKEND"/*.sh 2>/dev/null || true
     igf_config validate >/dev/null
     "$BACKEND/install-launchd.sh"
     while IFS=$'\t' read -r repo_id enabled _rest; do
       [[ -n "$repo_id" ]] || continue
-      [[ "$enabled" == "enabled" ]] || continue
       repo_json="$(igf_config repo "$repo_id")"
       kind="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; s=json.load(sys.stdin).get("schedule"); print("custom" if isinstance(s,dict) else "inherit")' <<<"$repo_json")"
+      if [[ "$enabled" != "enabled" ]]; then
+        # Disabled custom-scheduled repos must not keep a per-repo agent (drift).
+        [[ "$kind" == "custom" ]] && "$BACKEND/uninstall-launchd.sh" --repo "$repo_id" || true
+        continue
+      fi
       [[ "$kind" == "custom" ]] && "$BACKEND/install-launchd.sh" --repo "$repo_id"
     done < <(igf_config list)
-    igf_emit repair "${id:-all}"
+    igf_emit repair "${repair_id:-all}"
     printf 'repair: complete\n'
     ;;
   enable)

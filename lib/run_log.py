@@ -75,18 +75,35 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _record_key(rec: dict[str, Any]) -> tuple[str, str, str]:
+    return (str(rec.get("job_id") or ""), str(rec.get("ts") or ""), str(rec.get("type") or ""))
+
+
 def read_records() -> list[dict[str, Any]]:
-    """Flat run records, oldest→newest, merging legacy file + event stream."""
+    """Flat run records, oldest→newest, merging legacy file + event stream.
+
+    Dedupes on (job_id, ts, type) so a run present in both ``runs.jsonl`` (legacy
+    mirror) and ``events.jsonl`` is counted once.
+    """
     records: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(rec: dict[str, Any]) -> None:
+        key = _record_key(rec)
+        if key in seen:
+            return
+        seen.add(key)
+        records.append(rec)
+
     for r in _read_jsonl(runs_path()):
         if r.get("schema") == events.EVENT_SCHEMA:
             if r.get("kind") == "run":
-                records.append(_project_run_event(r))
+                add(_project_run_event(r))
         else:
-            records.append(r)
+            add(r)
     for ev in events.read_events():
         if ev.get("kind") == "run":
-            records.append(_project_run_event(ev))
+            add(_project_run_event(ev))
     records.sort(key=lambda r: r.get("ts") or "")
     return records
 

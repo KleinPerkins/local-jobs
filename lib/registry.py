@@ -48,8 +48,11 @@ def load_registry() -> dict[str, Any]:
     with path.open() as handle:
         data = yaml.safe_load(handle) or {}
     schema = data.get("schema")
-    if schema not in (None, "registry/v1") and data.get("version") != 1:
+    version = data.get("version", 1)
+    if schema not in (None, "registry/v1"):
         raise SystemExit(f"unsupported registry schema: {schema!r}")
+    if version not in (None, 1):
+        raise SystemExit(f"unsupported registry version: {version!r}")
     return data
 
 

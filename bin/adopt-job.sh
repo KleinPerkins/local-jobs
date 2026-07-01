@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$label" ]] || die "adopt-job requires --label <launchd-label>"
 
-plist="$HOME/Library/LaunchAgents/${label}.plist"
+plist="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/launchd.py" plist-path --label "$label")"
 [[ -f "$plist" ]] || die "no plist for label: $plist"
 
 # Extract program/args/env/schedule from the plist.
@@ -50,6 +50,14 @@ PY
 program="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["program"])' "$parsed")"
 [[ -n "$program" ]] || die "plist has no ProgramArguments to adopt: $label"
 [[ -n "$id" ]] || id="${label##*.}"
+# Global-uniqueness invariant (same as add-job): ids are a cross-type namespace.
+resolved_rc=0
+resolved_out="$(registry_py instance-type --id "$id" 2>&1)" || resolved_rc=$?
+if [[ $resolved_rc -eq 0 ]]; then
+  die "id '$id' already exists under type '$resolved_out'; pick a new --id or delete the existing instance"
+elif [[ "$resolved_out" == *"ambiguous id"* ]]; then
+  die "id '$id' already exists ($resolved_out)"
+fi
 schedule="$("$LOCAL_JOBS_PYTHON" -c 'import json,sys; d=json.loads(sys.argv[1]); print("%02d:%02d" % (int(d["hour"]), int(d["minute"])))' "$parsed")"
 
 # Build the command-store entry through the chassis (contract + store), so the
@@ -84,8 +92,9 @@ if (( relabel == 1 )); then
   new_label="com.kleinperkins.local-jobs.command.${id}"
   "$(require_handler command)" repair --id "$id"
   if [[ "$label" != "$new_label" ]]; then
+    old_plist="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/launchd.py" plist-path --label "$label")"
     launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
-    rm -f "$plist"
+    rm -f "$old_plist"
     log "relabeled $label -> $new_label (original booted out + removed)"
   fi
 else

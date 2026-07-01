@@ -222,6 +222,9 @@ def main() -> int:
     p_patch = sub.add_parser("build-patch")
     p_patch.add_argument("--schema", required=True, help="add_schema JSON")
     p_patch.add_argument("rest", nargs=argparse.REMAINDER)
+    p_miss = sub.add_parser("missing-required")
+    p_miss.add_argument("--schema", required=True, help="add_schema JSON")
+    p_miss.add_argument("rest", nargs=argparse.REMAINDER)
     args = ap.parse_args()
 
     if args.cmd == "validate-describe":
@@ -257,6 +260,17 @@ def main() -> int:
             print(json.dumps({"errors": errors}), file=sys.stderr)
             return 2
         print(json.dumps(entry))
+        return 0
+    if args.cmd == "missing-required":
+        schema = json.loads(args.schema)
+        rest = list(args.rest)
+        if rest and rest[0] == "--":
+            rest = rest[1:]
+        miss = missing_required(schema, rest)
+        if miss:
+            print(" ".join(miss), file=sys.stderr)
+            return 2
+        print("ok")
         return 0
     return 1
 

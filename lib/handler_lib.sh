@@ -172,12 +172,20 @@ _hl_cmd_repair() {
   local id="" all=0
   while [[ $# -gt 0 ]]; do case "$1" in --id) shift; id="${1:-}" ;; --all) all=1 ;; *) hl_die "unknown repair option: $1" ;; esac; shift; done
   local ids=()
-  if [[ -n "$id" && "$all" -eq 0 ]]; then ids=("$id"); else
-    while IFS= read -r iid; do [[ -n "$iid" ]] && ids+=("$iid"); done < <(_hl_store list | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(e["id"]) for e in json.load(sys.stdin) if e.get("enabled",True)]')
+  if [[ -n "$id" && "$all" -eq 0 ]]; then
+    ids=("$(_hl_resolve_id "$id")")
+  else
+    while IFS= read -r iid; do [[ -n "$iid" ]] && ids+=("$iid"); done \
+      < <(_hl_store list | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; [print(e["id"]) for e in json.load(sys.stdin)]')
   fi
   local iid
   for iid in "${ids[@]}"; do
-    if _hl_install "$iid" >/dev/null; then :; else printf 'repair: install failed for %s\n' "$iid" >&2; fi
+    if [[ "$(_hl_enabled "$iid")" == "true" ]]; then
+      _hl_install "$iid" >/dev/null || printf 'repair: install failed for %s\n' "$iid" >&2
+    else
+      # Converge disabled instances: boot out any lingering agent (fixes drift).
+      _hl_runtime uninstall --id "$iid" >/dev/null 2>&1 || true
+    fi
   done
   _hl_emit lifecycle repair "${id:-all}"
   printf 'repair: complete\n'
