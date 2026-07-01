@@ -82,9 +82,11 @@ print("@@RUNLOG@@ " + json.dumps({
 }
 
 handler_doctor_extra() {
-  local issues=0
+  local issues=0 agents_dir legacy_plist
   if [[ -x "$ARCHIVE_SCRIPT" ]]; then printf 'archive script: ok\n'; else printf 'archive script: missing\n'; issues=$((issues+1)); fi
-  if [[ -f "$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist" ]] || _hl_py launchd.py is-loaded --label "$LEGACY_LABEL"; then
+  agents_dir="$(_hl_py launchd.py agents-dir 2>/dev/null || true)"
+  legacy_plist="${agents_dir:-$HOME/Library/LaunchAgents}/${LEGACY_LABEL}.plist"
+  if [[ -f "$legacy_plist" ]] || _hl_py launchd.py is-loaded --label "$LEGACY_LABEL"; then
     printf 'legacy agent still present: %s (run repair)\n' "$LEGACY_LABEL"; issues=$((issues+1))
   fi
   return "$issues"
@@ -92,7 +94,9 @@ handler_doctor_extra() {
 
 # Retire any legacy-labelled agent on repair, then converge via the chassis.
 if [[ "${1:-}" == "repair" ]]; then
-  if [[ -f "$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist" ]] || _hl_py launchd.py is-loaded --label "$LEGACY_LABEL" 2>/dev/null; then
+  agents_dir="$(_hl_py launchd.py agents-dir 2>/dev/null || true)"
+  legacy_plist="${agents_dir:-$HOME/Library/LaunchAgents}/${LEGACY_LABEL}.plist"
+  if [[ -f "$legacy_plist" ]] || _hl_py launchd.py is-loaded --label "$LEGACY_LABEL" 2>/dev/null; then
     _hl_py launchd.py uninstall --label "$LEGACY_LABEL" >/dev/null 2>&1 || true
     printf 'retired legacy agent %s\n' "$LEGACY_LABEL"
   fi
