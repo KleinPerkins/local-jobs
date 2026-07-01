@@ -15,7 +15,8 @@ These are operator-facing commands routed by the core (not handler ABI):
 | `dashboard [--json\|--brief]` | Rich `dashboard/v1` payload or plain-English summary |
 | `explain-job --id <id>` | Narrative troubleshooting + suggested commands |
 | `resolve-instance --query <text>` | Fuzzy job discovery (exit 0/1/2) |
-| `list-types [--plain\|--json]` | Type catalog with `add_schema` in JSON mode |
+| `list-types [--plain\|--json]` | Human/simple type catalog with `add_schema` in JSON mode |
+| `describe-types` | Machine-readable type+schema **superset** (always JSON): list-types fields plus `schema_version` and the `update_fields` matrix; feeds the live job-builder canvas |
 | `add-job [--dry-run]` | Create instance (preview with `--dry-run`) |
 | `update-job` / `delete-job` / `run-job` / `logs-job` | Instance lifecycle |
 | `enable-job` / `disable-job` | Toggle scheduling (`pause-job`/`resume-job` aliases) |

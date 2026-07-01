@@ -16,6 +16,7 @@ Commands (aliases in parentheses):
   explain-job            Narrative troubleshooting for one job (--id <id> [--type])
   resolve-instance       Fuzzy job discovery (--query <text> [--json])
   list-types (types)     Job type catalog (--plain human, --json schemas)
+  describe-types         Machine-readable type+schema superset as JSON (feeds job-builder canvas)
   add-job (add)          Add a job instance (--type <t> --id <id> [type-specific flags])
   update-job (update)    Update schedule and/or enabled state
   delete-job (delete)    Remove a job instance (requires --confirm)
@@ -46,6 +47,7 @@ normalize_cmd() {
     explain-job|explain) printf 'explain-job' ;;
     resolve-instance|resolve-job|resolve) printf 'resolve-instance' ;;
     list-types|types|job-types) printf 'list-types' ;;
+    describe-types) printf 'describe-types' ;;
     add|add-job) printf 'add' ;;
     update|update-job) printf 'update' ;;
     delete|delete-job) printf 'delete' ;;
@@ -137,6 +139,12 @@ cmd_list_types() {
   done
   if (( json == 1 )); then registry_py list-types --json
   else registry_py list-types --plain; fi
+}
+
+cmd_describe_types() {
+  # Machine-readable superset (schema_version + update-field matrix); always JSON.
+  while [[ $# -gt 0 ]]; do case "$1" in --json) ;; *) die "unknown describe-types option: $1" ;; esac; shift; done
+  registry_py describe-types --json
 }
 
 cmd_add() {
@@ -364,6 +372,7 @@ main() {
     explain-job) cmd_explain_job "$@" ;;
     resolve-instance) cmd_resolve_instance "$@" ;;
     list-types) cmd_list_types "$@" ;;
+    describe-types) cmd_describe_types "$@" ;;
     add) cmd_add "$@" ;;
     update) cmd_update "$@" ;;
     delete) cmd_delete "$@" ;;

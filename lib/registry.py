@@ -172,60 +172,16 @@ def collect_instances(reg: dict[str, Any]) -> list[dict[str, Any]]:
     return instances
 
 
-def _score_match(query: str, text: str) -> int:
-    """Higher score = better match. 0 = no match."""
-    if not query or not text:
-        return 0
-    q, t = query.lower(), text.lower()
-    if q == t:
-        return 100
-    if t.startswith(q):
-        return 80
-    if q in t:
-        return 50
-    return 0
-
-
 def resolve_instance(query: str, reg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Score instances and registry types against a free-text query."""
-    reg = reg or load_registry()
-    hits: dict[str, dict[str, Any]] = {}
+    """Delegate to :mod:`resolver`, the single source of truth for discovery.
 
-    def _add(iid: str, jtype: str, score: int, field: str) -> None:
-        if score <= 0:
-            return
-        key = f"{jtype}:{iid}"
-        prev = hits.get(key)
-        if prev is None or score > prev["score"]:
-            hits[key] = {"id": iid, "type": jtype, "score": score, "matched": field}
+    The scoring logic moved to ``lib/resolver.py``; this thin re-export keeps
+    ``registry.resolve_instance`` working for existing importers (imported lazily
+    to avoid any load-time cycle between the two modules).
+    """
+    import resolver
 
-    for jtype, meta in job_types(reg).items():
-        desc = (meta or {}).get("description") or ""
-        for field, text in (("type", jtype), ("description", desc)):
-            sc = _score_match(query, text)
-            if sc >= 50:
-                _add(jtype, jtype, sc, field)
-        hdesc = handler_describe(jtype, reg)
-        if hdesc.get("cardinality") == "singleton":
-            sid = hdesc.get("label_token") or jtype
-            sc = _score_match(query, sid)
-            if sc >= 50:
-                _add(sid, jtype, sc, "singleton_id")
-
-    for jtype in job_types(reg):
-        for inst in handler_list_instances(jtype, reg):
-            if not isinstance(inst, dict) or inst.get("role") == "error":
-                continue
-            iid = inst.get("id") or ""
-            for field in ("id", "path", "program", "launchd_label"):
-                val = inst.get(field)
-                if isinstance(val, str):
-                    sc = _score_match(query, val)
-                    if sc > 0:
-                        _add(iid, jtype, sc, field)
-
-    ranked = sorted(hits.values(), key=lambda h: (-h["score"], h["id"]))
-    return ranked
+    return resolver.resolve_instance(query, reg)
 
 
 def instance_type(instance_id: str, reg: dict[str, Any] | None = None) -> str:
@@ -390,11 +346,44 @@ def add_schema(job_type: str) -> int:
     return 0
 
 
-def build_list_types(reg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Aggregate handler describe + registry metadata for list-types --json."""
+def _update_field_matrix(add_schema: list[Any]) -> list[dict[str, Any]]:
+    """Which ``add_schema`` flags ``update-job`` can mutate.
+
+    The instance ``id`` is the key (never updatable); every other declared field
+    is patchable. Mirrors ``handler_lib.sh`` ``_hl_cmd_update``, which builds the
+    update patch from the same ``add_schema`` with ``--id`` stripped out.
+    """
+    fields: list[dict[str, Any]] = []
+    for f in add_schema:
+        if not isinstance(f, dict):
+            continue
+        flag = f.get("flag")
+        if not flag:
+            continue
+        name = f.get("field") or flag.lstrip("-").replace("-", "_")
+        updatable = f.get("kind") != "id" and name != "id" and flag != "--id"
+        fields.append({
+            "flag": flag,
+            "field": name,
+            "kind": f.get("kind", "scalar"),
+            "required": bool(f.get("required")),
+            "updatable": updatable,
+            "help": f.get("help") or f.get("description") or "",
+        })
+    return fields
+
+
+def build_describe_types(reg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Full per-type schema surface — the machine-readable superset of
+    ``list-types --json`` that feeds the live job-builder canvas and agents.
+
+    Adds ``schema_version`` and the ``update_fields`` matrix on top of the
+    human-facing list-types fields. Pure read (drives handlers via ``describe``).
+    """
     out: list[dict[str, Any]] = []
     for slug, meta in job_types(reg).items():
         desc = handler_describe(slug, reg)
+        add_schema = desc.get("add_schema") or []
         singleton_id = None
         if desc.get("cardinality") == "singleton":
             singleton_id = desc.get("label_token") or slug
@@ -404,9 +393,42 @@ def build_list_types(reg: dict[str, Any]) -> list[dict[str, Any]]:
             "cardinality": desc.get("cardinality"),
             "singleton_id": singleton_id,
             "label_template": desc.get("label_template"),
-            "add_schema": desc.get("add_schema") or [],
+            "schema_version": desc.get("schema_version", 1),
+            "add_schema": add_schema,
+            "update_fields": _update_field_matrix(add_schema),
         })
     return out
+
+
+# list-types --json is the human/simple surface: a strict projection of the
+# describe-types superset (same fields, unchanged shape) so there is one
+# aggregation and no copy-paste drift between the two verbs.
+_LIST_TYPE_KEYS = ("slug", "description", "cardinality", "singleton_id", "label_template", "add_schema")
+
+
+def build_list_types(reg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Aggregate handler describe + registry metadata for list-types --json."""
+    return [{k: t[k] for k in _LIST_TYPE_KEYS} for t in build_describe_types(reg)]
+
+
+def build_builder_snapshot(reg: dict[str, Any]) -> dict[str, Any]:
+    """The job-builder canvas snapshot: full type schemas (``describe-types``)
+    plus the current managed instances.
+
+    The canvas embeds this verbatim so it can offer an **add** mode (driven by
+    the type schemas) and an **update** mode (pick an existing instance, edit its
+    updatable fields). Pure read — the only non-deterministic field is
+    ``generated_at`` — so it is idempotent for the same machine state.
+    """
+    from datetime import datetime
+
+    instances = [i for i in collect_instances(reg) if i.get("role") != "error"]
+    return {
+        "schema": "job-builder-snapshot/v1",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "types": build_describe_types(reg),
+        "instances": instances,
+    }
 
 
 def print_list_types_plain(types: list[dict[str, Any]]) -> None:
@@ -455,14 +477,15 @@ def cmd_resolve_instance(query: str, as_json: bool) -> int:
 
 
 def dashboard(as_json: bool, brief: bool = False) -> int:
-    # Delegates to lib/dashboard.py for the richer payload (Phase 7).
+    # Delegates to lib/dashboard.py for the richer payload; the narrative
+    # printers live in lib/explain.py (single source of truth).
     from importlib import import_module
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     dash = import_module("dashboard")
     payload = dash.build_dashboard(load_registry())
     if brief:
-        dash.print_brief(payload)
+        import_module("explain").print_brief(payload)
         return 0
     if as_json:
         print(json.dumps(payload, indent=2))
@@ -476,15 +499,16 @@ def cmd_explain_job(job_id: str, job_type: str | None, as_json: bool) -> int:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     dash = import_module("dashboard")
+    explain_mod = import_module("explain")
     reg = load_registry()
     if not job_type:
         job_type = instance_type(job_id, reg)
     payload = dash.build_dashboard(reg)
-    explain = dash.build_explain(job_id, job_type, payload)
+    explain = explain_mod.build_explain(job_id, job_type, payload)
     if as_json:
         print(json.dumps(explain, indent=2))
     else:
-        dash.print_explain(explain)
+        explain_mod.print_explain(explain)
     return 0
 
 
@@ -509,6 +533,11 @@ def main() -> int:
     p_list_types = sub.add_parser("list-types")
     p_list_types.add_argument("--plain", action="store_true")
     p_list_types.add_argument("--json", action="store_true")
+
+    p_desc_types = sub.add_parser("describe-types")
+    p_desc_types.add_argument("--json", action="store_true")  # always JSON; accepted for symmetry
+
+    sub.add_parser("builder-snapshot")  # types + current instances (job-builder canvas feed)
 
     p_resolve = sub.add_parser("resolve-instance")
     p_resolve.add_argument("--query", required=True)
@@ -545,6 +574,12 @@ def main() -> int:
             print(json.dumps(types, indent=2))
         else:
             print_list_types_plain(types)
+        return 0
+    if args.cmd == "describe-types":
+        print(json.dumps(build_describe_types(load_registry()), indent=2))
+        return 0
+    if args.cmd == "builder-snapshot":
+        print(json.dumps(build_builder_snapshot(load_registry()), indent=2))
         return 0
     if args.cmd == "resolve-instance":
         return cmd_resolve_instance(args.query, args.json)
