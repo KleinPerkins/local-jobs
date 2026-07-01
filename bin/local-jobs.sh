@@ -89,6 +89,20 @@ cmd_add() {
     shift
   done
   [[ -n "$job_type" ]] || die "add-job requires --type"
+  # Global-uniqueness invariant: an explicit --id must not already resolve under
+  # ANY type (instance ids are a global namespace). A genuinely-new id resolves
+  # to "unknown instance" (nonzero) and is allowed; an existing — or already
+  # ambiguous — id is rejected. Singletons pass no --id (their add is an upsert)
+  # and are therefore exempt.
+  if [[ -n "$id" ]]; then
+    local resolved rc=0
+    resolved="$(registry_py instance-type --id "$id" 2>&1)" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+      die "id '$id' already exists under type '$resolved'; ids must be globally unique (use update-job to change it, or pick a new id)"
+    elif [[ "$resolved" == *"ambiguous id"* ]]; then
+      die "id '$id' already exists ($resolved)"
+    fi
+  fi
   # Validate required flags from the handler's declared add_schema.
   local missing
   missing="$(registry_py add-schema --type "$job_type" | LJ_ARGS="${passthrough[*]}" "$LOCAL_JOBS_PYTHON" -c '

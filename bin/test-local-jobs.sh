@@ -120,8 +120,10 @@ test_conformance() {
 }
 
 # ---- command full lifecycle (hermetic, real run) ---------------------------
-# NB: a unique id (not "demo") — ids are namespaced per type, and the igf
-# sandbox repo is "demo"; `--id` resolution would otherwise be ambiguous.
+# Ids are a GLOBAL namespace: add-job rejects an id already used by any type and
+# bare --id resolution is fail-closed on collisions (see test_id_uniqueness).
+# "cmdjob" is unique in the sandbox (the igf repo is "demo"), so every bare
+# --id below resolves deterministically.
 test_command_lifecycle() {
   echo "== command full lifecycle =="
   local cid="cmdjob"
@@ -165,6 +167,43 @@ test_igf() {
   "$PY" "$SB/lib/run_log.py" recent --limit 5 --id demo | "$PY" -c 'import json,sys; assert len(json.load(sys.stdin))>=1' && ok "igf per-repo last-run recorded" || bad "igf per-repo last-run"
   inh="$("$PY" "$SB/backends/incremental-git-fetch/config.py" inherit-ids)"
   [[ "$inh" == "demo" ]] && ok "igf inherit-ids" || bad "igf inherit-ids=$inh"
+}
+
+# ---- global id-uniqueness + fail-closed ambiguity --------------------------
+test_id_uniqueness() {
+  echo "== id uniqueness + ambiguity =="
+  local out rc igf="$SB/config/jobs/incremental-git-fetch.yml"
+
+  # (a) WRITE-TIME: add-job rejects an id already claimed by another type.
+  CLI add-job --type command --id shared --program /bin/echo --arg=x --schedule 03:03 >/dev/null 2>&1 \
+    && ok "seed command id 'shared'" || bad "seed shared"
+  rc=0; out="$(CLI add-job --type incremental-git-fetch --id shared --path demo --branch master 2>&1)" || rc=$?
+  if [[ $rc -ne 0 && "$out" == *"globally unique"* ]]; then ok "add-job rejects duplicate id across types"; else bad "dup id not rejected (rc=$rc)"; fi
+
+  # (b) READ-TIME: force a real cross-type collision by injecting the igf side
+  # directly (bypassing the write-time guard), then prove bare --id is
+  # ambiguous while --type disambiguates deterministically.
+  cp "$igf" "$igf.bak"
+  "$PY" - "$igf" <<'PY'
+import sys, yaml
+p = sys.argv[1]; d = yaml.safe_load(open(p))
+d.setdefault("repos", []).append(
+    {"id": "shared", "path": "demo", "remote": "origin", "branch": "master", "enabled": True, "schedule": "inherit"}
+)
+yaml.safe_dump(d, open(p, "w"), sort_keys=False)
+PY
+  rc=0; out="$("$PY" "$SB/lib/registry.py" instance-type --id shared 2>&1)" || rc=$?
+  if [[ $rc -ne 0 && "$out" == *"ambiguous id"* ]]; then ok "resolver fail-closed on collision"; else bad "resolver not ambiguous (rc=$rc)"; fi
+  rc=0; out="$(CLI run-job --id shared --dry-run 2>&1)" || rc=$?
+  if [[ $rc -ne 0 && "$out" == *"ambiguous id"* ]]; then ok "bare --id errors ambiguous"; else bad "bare --id not ambiguous (rc=$rc)"; fi
+  CLI run-job --type command --id shared --dry-run 2>/dev/null | grep -q 'dry-run' \
+    && ok "--type command --id resolves (escape hatch)" || bad "--type command escape hatch"
+  CLI run-job --type incremental-git-fetch --id shared --dry-run >/dev/null 2>&1 \
+    && ok "--type igf --id resolves (escape hatch)" || bad "--type igf escape hatch"
+
+  # cleanup: restore the igf config and drop the seeded command instance.
+  mv "$igf.bak" "$igf"
+  CLI delete-job --type command --id shared --confirm >/dev/null 2>&1 || true
 }
 
 # ---- quarantine: a broken type must not crash view/dashboard ---------------
@@ -275,6 +314,7 @@ main() {
   if [[ "$MODE" != "quick" ]]; then
     test_cpp_archive; echo
     test_igf; echo
+    test_id_uniqueness; echo
     test_type_evolution; echo
     test_authoring_rollback; echo
   fi

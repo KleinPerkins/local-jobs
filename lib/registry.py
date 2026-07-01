@@ -169,12 +169,28 @@ def collect_instances(reg: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def instance_type(instance_id: str, reg: dict[str, Any] | None = None) -> str:
+    """Resolve the single job type that owns ``instance_id``.
+
+    Fail-closed on cross-type collisions: instance ids are a global namespace,
+    so an id claimed by two types is an error, not a silent first-match. Callers
+    that already know the type pass ``--type`` and never reach here.
+    """
     reg = reg or load_registry()
+    matches: list[str] = []
     for jtype in job_types(reg):
         for inst in handler_list_instances(jtype, reg):
             if isinstance(inst, dict) and inst.get("id") == instance_id:
-                return jtype
-    raise SystemExit(f"unknown instance: {instance_id}")
+                matches.append(jtype)
+                break  # this type owns the id; stop scanning its instances
+    if not matches:
+        raise SystemExit(f"unknown instance: {instance_id}")
+    if len(matches) > 1:
+        joined = ", ".join(sorted(matches))
+        raise SystemExit(
+            f"ambiguous id '{instance_id}' in types: {joined}; "
+            f"re-run with --type <type> to disambiguate"
+        )
+    return matches[0]
 
 
 def managed_labels(reg: dict[str, Any], instances: list[dict[str, Any]] | None = None) -> set[str]:
