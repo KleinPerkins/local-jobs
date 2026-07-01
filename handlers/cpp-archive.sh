@@ -22,7 +22,7 @@ HANDLER_CARDINALITY="singleton"
 HANDLER_LABEL_TOKEN="cpp-archive"
 HANDLER_SCHEMA_VERSION=1
 HANDLER_SINGLETON_ID="cpp-archive"
-HANDLER_STORE_FILE="${LOCAL_JOBS_CPP_ARCHIVE_CONFIG:-$LOCAL_JOBS_HOME/config/jobs/cpp-archive.yml}"
+HANDLER_STORE_FILE="${LOCAL_JOBS_CPP_ARCHIVE_CONFIG:-$LOCAL_JOBS_STATE/jobs/cpp-archive.yml}"
 HANDLER_FIELD_DEFAULTS='{"enabled":true,"schedule":"18:00"}'
 HANDLER_REQUIRED_FIELDS='[]'
 HANDLER_ADD_SCHEMA='[
@@ -34,13 +34,14 @@ handler_describe() {
   HANDLER_TYPE="$HANDLER_TYPE" HANDLER_CARDINALITY="$HANDLER_CARDINALITY" \
   HANDLER_LABEL_TOKEN="$HANDLER_LABEL_TOKEN" HANDLER_SCHEMA_VERSION="$HANDLER_SCHEMA_VERSION" \
   HANDLER_STORE_FILE="$HANDLER_STORE_FILE" HANDLER_ADD_SCHEMA="$HANDLER_ADD_SCHEMA" \
+  HANDLER_LABEL_TEMPLATE="$(_hl_label_template)" \
     "$LOCAL_JOBS_PYTHON" - <<'PY'
 import json, os
 print(json.dumps({
     "type": os.environ["HANDLER_TYPE"],
     "cardinality": os.environ["HANDLER_CARDINALITY"],
     "label_token": os.environ["HANDLER_LABEL_TOKEN"],
-    "label_template": f'com.kleinperkins.local-jobs.{os.environ["HANDLER_LABEL_TOKEN"]}',
+    "label_template": os.environ["HANDLER_LABEL_TEMPLATE"],
     "schema_version": int(os.environ["HANDLER_SCHEMA_VERSION"]),
     "config_file": os.environ["HANDLER_STORE_FILE"],
     "add_schema": json.loads(os.environ["HANDLER_ADD_SCHEMA"]),
@@ -73,7 +74,12 @@ handler_do_run() {
   fi
   (( dry == 1 )) && status="dry-run"
   printf '%s\n' "$out"
-  local last_line; last_line="$(printf '%s\n' "$out" | tail -n 1)"
+  local last_line; last_line="$(OUT="$out" "$LOCAL_JOBS_PYTHON" - <<'PY'
+import os
+lines = os.environ.get("OUT", "").splitlines()
+print(lines[-1] if lines else "")
+PY
+)"
   STATUS="$status" LAST="$last_line" RC="$rc" "$LOCAL_JOBS_PYTHON" - <<'PY'
 import json, os
 print("@@RUNLOG@@ " + json.dumps({
