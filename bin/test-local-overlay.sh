@@ -14,6 +14,7 @@ export LOCAL_JOBS_STATE="$SB/state"
 export LOCAL_JOBS_REGISTRY="$GLOBAL_HOME/config/registry.yml"
 export LOCAL_JOBS_LAUNCHD_DISABLE=1
 export LOCAL_JOBS_LAUNCHAGENTS_DIR="$SB/agents"
+export LOCAL_JOBS_PRESERVE_HARNESS_ENV=1
 export LOCAL_JOBS_CPP_ARCHIVE_CONFIG="$SB/state/jobs/cpp-archive.yml"
 export CPP_ARCHIVE_HOME="$SB/fake-archive"
 export CPP_ARCHIVE_SOURCE_REPO="$SB/source"
@@ -41,5 +42,12 @@ YAML
 
 "$GLOBAL_HOME/scripts/local-jobs.sh" list-types --plain | "$PY" -c 'import sys; s=sys.stdin.read(); assert "cpp-archive" in s, s'
 "$GLOBAL_HOME/scripts/local-jobs.sh" run-job --type cpp-archive --id cpp-archive --dry-run | "$PY" -c 'import sys; s=sys.stdin.read(); assert "@@RUNLOG@@" in s, s'
+NO_TMP="$SB/no-tmp"
+mkdir -p "$NO_TMP"
+chmod 0555 "$NO_TMP"
+env TMPDIR="$NO_TMP" TMP="$NO_TMP" TEMP="$NO_TMP" "$GLOBAL_HOME/scripts/local-jobs.sh" dashboard --brief | "$PY" -c 'import sys; s=sys.stdin.read(); assert "QUARANTINED" not in s and "managed job(s)" in s, s'
+env TMPDIR="$NO_TMP" TMP="$NO_TMP" TEMP="$NO_TMP" "$GLOBAL_HOME/scripts/local-jobs.sh" view-jobs | "$PY" -c 'import sys; s=sys.stdin.read(); assert "QUARANTINED" not in s and "cpp-archive" in s, s'
+env TMPDIR="$NO_TMP" TMP="$NO_TMP" TEMP="$NO_TMP" "$GLOBAL_HOME/scripts/local-jobs.sh" doctor --plain | "$PY" -c 'import sys; s=sys.stdin.read(); assert "QUARANTINED" not in s and "doctor: PASS" in s, s'
+chmod 0755 "$NO_TMP"
 printf 'local overlay test passed
 '

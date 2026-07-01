@@ -35,8 +35,7 @@ handler_describe() {
   HANDLER_LABEL_TOKEN="$HANDLER_LABEL_TOKEN" HANDLER_SCHEMA_VERSION="$HANDLER_SCHEMA_VERSION" \
   HANDLER_STORE_FILE="$HANDLER_STORE_FILE" HANDLER_ADD_SCHEMA="$HANDLER_ADD_SCHEMA" \
   HANDLER_LABEL_TEMPLATE="$(_hl_label_template)" \
-    "$LOCAL_JOBS_PYTHON" - <<'PY'
-import json, os
+    "$LOCAL_JOBS_PYTHON" -c 'import json, os
 print(json.dumps({
     "type": os.environ["HANDLER_TYPE"],
     "cardinality": os.environ["HANDLER_CARDINALITY"],
@@ -45,19 +44,16 @@ print(json.dumps({
     "schema_version": int(os.environ["HANDLER_SCHEMA_VERSION"]),
     "config_file": os.environ["HANDLER_STORE_FILE"],
     "add_schema": json.loads(os.environ["HANDLER_ADD_SCHEMA"]),
-}, indent=2))
-PY
+}, indent=2))'
 }
 
 # Carry the archive env on the scheduled agent so the nightly run can push.
 handler_launchd_env() {
-  SOURCE_REPO="$SOURCE_REPO" TARGET_REMOTE="$TARGET_REMOTE" "$LOCAL_JOBS_PYTHON" - <<'PY'
-import json, os
+  SOURCE_REPO="$SOURCE_REPO" TARGET_REMOTE="$TARGET_REMOTE" "$LOCAL_JOBS_PYTHON" -c 'import json, os
 print(json.dumps({
     "CPP_ARCHIVE_SOURCE_REPO": os.environ["SOURCE_REPO"],
     "CPP_ARCHIVE_TARGET_REMOTE": os.environ["TARGET_REMOTE"],
-}))
-PY
+}))'
 }
 
 handler_working_dir() { printf '%s' "$CPP_HOME"; }
@@ -74,19 +70,14 @@ handler_do_run() {
   fi
   (( dry == 1 )) && status="dry-run"
   printf '%s\n' "$out"
-  local last_line; last_line="$(OUT="$out" "$LOCAL_JOBS_PYTHON" - <<'PY'
-import os
+  local last_line; last_line="$(OUT="$out" "$LOCAL_JOBS_PYTHON" -c 'import os
 lines = os.environ.get("OUT", "").splitlines()
-print(lines[-1] if lines else "")
-PY
-)"
-  STATUS="$status" LAST="$last_line" RC="$rc" "$LOCAL_JOBS_PYTHON" - <<'PY'
-import json, os
+print(lines[-1] if lines else "")')"
+  STATUS="$status" LAST="$last_line" RC="$rc" "$LOCAL_JOBS_PYTHON" -c 'import json, os
 print("@@RUNLOG@@ " + json.dumps({
     "status": os.environ["STATUS"],
     "fields": {"exit_code": int(os.environ["RC"]), "last_line": os.environ["LAST"][:200]},
-}, separators=(",", ":")))
-PY
+}, separators=(",", ":")))'
   return "$rc"
 }
 
