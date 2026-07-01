@@ -285,7 +285,7 @@ case "${1:-}" in
   logs) shift; cmd_logs "$@" ;;
   add)
     shift
-    id="" path="" branch="" remote="" schedule="inherit" enabled="true"
+    id="" path="" branch="" remote="" schedule="inherit" enabled="true" dry=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --id) shift; id="${1:-}" ;;
@@ -294,6 +294,7 @@ case "${1:-}" in
         --remote) shift; remote="${1:-}" ;;
         --schedule) shift; schedule="$(parse_schedule "${1:-}")" ;;
         --enabled) shift; enabled="${1:-}" ;;
+        --dry-run) dry=1 ;;
         *) die "unknown add option: $1" ;;
       esac
       shift
@@ -301,6 +302,11 @@ case "${1:-}" in
     [[ -n "$id" && -n "$path" && -n "$branch" ]] || die "add requires --id --path --branch"
     args=(add --id "$id" --path "$path" --branch "$branch" --enabled "$enabled" --schedule "$schedule")
     [[ -n "$remote" ]] && args+=(--remote "$remote")
+    (( dry == 1 )) && args+=(--dry-run)
+    if (( dry == 1 )); then
+      igf_config "${args[@]}"
+      return 0
+    fi
     igf_config "${args[@]}"
     # A custom-scheduled, enabled repo gets its own per-repo agent immediately.
     if [[ "$schedule" != "inherit" && "$enabled" =~ ^(true|1|yes)$ ]]; then

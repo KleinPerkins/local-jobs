@@ -88,23 +88,77 @@ _hl_validate_schedule() { # value -> die on invalid
 # ---- generic verbs ---------------------------------------------------------
 
 _hl_cmd_add() {
+  local dry=0 rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=1 ;;
+      *) rest+=("$1") ;;
+    esac
+    shift
+  done
   local schema="$HANDLER_ADD_SCHEMA" entry
-  entry="$(_hl_py contract.py build-entry --schema "$schema" -- "$@")" \
+  entry="$(_hl_py contract.py build-entry --schema "$schema" -- "${rest[@]}")" \
     || hl_die "invalid add flags"
-  # Singletons have no --id flag; inject the fixed id into the built entry.
   if [[ "$HANDLER_CARDINALITY" == "singleton" ]]; then
     entry="$(SID="$HANDLER_SINGLETON_ID" printf '%s' "$entry" | SID="$HANDLER_SINGLETON_ID" "$LOCAL_JOBS_PYTHON" -c 'import json,os,sys; e=json.load(sys.stdin); e["id"]=os.environ["SID"]; print(json.dumps(e))')"
   fi
-  # validate schedule if present
   local sched; sched="$(printf '%s' "$entry" | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("schedule",""))')"
   _hl_validate_schedule "$sched"
   local iid; iid="$(printf '%s' "$entry" | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
-  # Singletons are pre-provisioned: add is an upsert so re-running add-job just
-  # reconfigures the one instance instead of erroring.
+  local store_args=()
+  (( dry == 1 )) && store_args+=(--dry-run)
+  local would_upsert=0
   if [[ "$HANDLER_CARDINALITY" == "singleton" ]] && _hl_store get --id "$iid" >/dev/null 2>&1; then
-    _hl_store set --id "$iid" --patch "$entry" >/dev/null
+    would_upsert=1
+    if (( dry == 1 )); then
+      _hl_store set --id "$iid" --patch "$entry" "${store_args[@]}" >/dev/null
+    else
+      _hl_store set --id "$iid" --patch "$entry" >/dev/null
+    fi
   else
-    _hl_store add --entry "$entry" >/dev/null
+    if (( dry == 1 )); then
+      _hl_store add --entry "$entry" "${store_args[@]}" >/dev/null
+    else
+      _hl_store add --entry "$entry" >/dev/null
+    fi
+  fi
+  if (( dry == 1 )); then
+    local enabled would_install=0
+    enabled="$(printf '%s' "$entry" | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; print("true" if json.load(sys.stdin).get("enabled",True) else "false")')"
+    [[ "$enabled" == "true" ]] && would_install=1
+    ENTRY="$entry" IID="$iid" TOKEN="$HANDLER_LABEL_TOKEN" CARD="$HANDLER_CARDINALITY" \
+      WOULD_INSTALL="$would_install" WOULD_UPSERT="$would_upsert" HANDLER_TYPE="$HANDLER_TYPE" \
+      LOCAL_JOBS_HOME="$LOCAL_JOBS_HOME" \
+      "$LOCAL_JOBS_PYTHON" - <<'PY'
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(os.environ.get("LOCAL_JOBS_HOME", ".")) / "lib"))
+import handler_runtime as hr
+import schedule as schedule_mod
+from datetime import datetime
+entry = json.loads(os.environ["ENTRY"])
+iid = os.environ["IID"]
+token = os.environ["TOKEN"]
+card = os.environ["CARD"]
+label = hr.label_for(token, card, iid)
+nr = {"window_start": None, "window_end": None, "basis": "unknown"}
+sched = entry.get("schedule")
+if sched:
+    try:
+        nr = schedule_mod.Schedule.parse(sched).next_run(datetime.now().astimezone())
+    except (ValueError, KeyError, TypeError):
+        pass
+print(json.dumps({
+    "dry_run": True,
+    "type": os.environ["HANDLER_TYPE"],
+    "entry": entry,
+    "launchd_label": label,
+    "next_run": nr,
+    "would_install": os.environ["WOULD_INSTALL"] == "1",
+    "would_upsert": os.environ["WOULD_UPSERT"] == "1",
+}, indent=2))
+PY
+    return 0
   fi
   if [[ "$(_hl_enabled "$iid")" == "true" ]]; then _hl_install "$iid" >/dev/null; fi
   _hl_emit lifecycle add "$iid"

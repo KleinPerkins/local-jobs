@@ -12,7 +12,10 @@ Usage: local-jobs.sh <command> [options]
 
 Commands (aliases in parentheses):
   view-jobs (view)       List managed instances + discovered com.kleinperkins.* agents
-  dashboard              Rich status payload (use --json for the canvas feed)
+  dashboard              Rich status payload (--json, --brief for plain-English summary)
+  explain-job            Narrative troubleshooting for one job (--id <id> [--type])
+  resolve-instance       Fuzzy job discovery (--query <text> [--json])
+  list-types (types)     Job type catalog (--plain human, --json schemas)
   add-job (add)          Add a job instance (--type <t> --id <id> [type-specific flags])
   update-job (update)    Update schedule and/or enabled state
   delete-job (delete)    Remove a job instance (requires --confirm)
@@ -21,16 +24,18 @@ Commands (aliases in parentheses):
   repair-job (repair)    Idempotent repair for one or all managed jobs
   enable-job (enable)    Enable a job instance
   disable-job (disable)  Disable a job instance (keeps config)
+  pause-job (pause)      Alias for disable-job
+  resume-job (resume)    Alias for enable-job
   adopt-job (adopt)      Import an installed LaunchAgent as a managed command job
   add-job-type           Scaffold + register + verify a new ABI-conformant type
   update-job-type        Migrate a type's instances forward (verify + regression)
-  doctor                 Run health checks across all registered types
+  doctor                 Run health checks (--plain for operator narrative)
 
 Global options:
-  --json                 JSON output (view-jobs, dashboard)
+  --json                 JSON output (view-jobs, dashboard, resolve-instance, explain-job)
   --type <job-type>      Required for add-job; optional hint elsewhere
 
-Run 'add-job --type <t>' flags via: registry add_schema (see ABI.md).
+Run 'list-types --plain' or 'add-job --type <t>' flags via registry add_schema (see ABI.md).
 USAGE
 }
 
@@ -38,14 +43,17 @@ normalize_cmd() {
   case "${1:-}" in
     view|view-jobs) printf 'view' ;;
     dashboard) printf 'dashboard' ;;
+    explain-job|explain) printf 'explain-job' ;;
+    resolve-instance|resolve-job|resolve) printf 'resolve-instance' ;;
+    list-types|types|job-types) printf 'list-types' ;;
     add|add-job) printf 'add' ;;
     update|update-job) printf 'update' ;;
     delete|delete-job) printf 'delete' ;;
     run|run-job) printf 'run' ;;
     logs|logs-job) printf 'logs' ;;
     repair|repair-job) printf 'repair' ;;
-    enable|enable-job) printf 'enable' ;;
-    disable|disable-job) printf 'disable' ;;
+    enable|enable-job|resume|resume-job) printf 'enable' ;;
+    disable|disable-job|pause|pause-job) printf 'disable' ;;
     adopt|adopt-job) printf 'adopt' ;;
     add-job-type) printf 'add-job-type' ;;
     update-job-type) printf 'update-job-type' ;;
@@ -69,17 +77,75 @@ cmd_view() {
 }
 
 cmd_dashboard() {
-  local json=0
-  while [[ $# -gt 0 ]]; do case "$1" in --json) json=1 ;; *) die "unknown dashboard option: $1" ;; esac; shift; done
-  if (( json == 1 )); then registry_py dashboard --json; else registry_py dashboard; fi
+  local json=0 brief=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=1 ;;
+      --brief) brief=1 ;;
+      *) die "unknown dashboard option: $1" ;;
+    esac
+    shift
+  done
+  if (( brief == 1 )); then registry_py dashboard --brief
+  elif (( json == 1 )); then registry_py dashboard --json
+  else registry_py dashboard; fi
+}
+
+cmd_explain_job() {
+  local id="" job_type="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id) shift; id="${1:-}" ;;
+      --type) shift; job_type="${1:-}" ;;
+      --json) json=1 ;;
+      *) die "unknown explain-job option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "$id" ]] || die "explain-job requires --id"
+  local args=(explain-job --id "$id")
+  [[ -n "$job_type" ]] && args+=(--type "$job_type")
+  (( json == 1 )) && args+=(--json)
+  registry_py "${args[@]}"
+}
+
+cmd_resolve_instance() {
+  local query="" json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --query) shift; query="${1:-}" ;;
+      --json) json=1 ;;
+      *) die "unknown resolve-instance option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "$query" ]] || die "resolve-instance requires --query"
+  local args=(resolve-instance --query "$query")
+  (( json == 1 )) && args+=(--json)
+  registry_py "${args[@]}"
+}
+
+cmd_list_types() {
+  local plain=0 json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --plain) plain=1 ;;
+      --json) json=1 ;;
+      *) die "unknown list-types option: $1" ;;
+    esac
+    shift
+  done
+  if (( json == 1 )); then registry_py list-types --json
+  else registry_py list-types --plain; fi
 }
 
 cmd_add() {
-  local job_type="" id="" passthrough=()
+  local job_type="" id="" dry=0 passthrough=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --type) shift; job_type="${1:-}" ;;
       --id) shift; id="${1:-}"; passthrough+=(--id "$id") ;;
+      --dry-run) dry=1; passthrough+=(--dry-run) ;;
       --*) # generic flag passthrough; consume an optional value
         local flag="$1"
         if [[ $# -ge 2 && "${2:-}" != --* ]]; then shift; passthrough+=("$flag" "$1"); else passthrough+=("$flag"); fi
@@ -89,12 +155,7 @@ cmd_add() {
     shift
   done
   [[ -n "$job_type" ]] || die "add-job requires --type"
-  # Global-uniqueness invariant: an explicit --id must not already resolve under
-  # ANY type (instance ids are a global namespace). A genuinely-new id resolves
-  # to "unknown instance" (nonzero) and is allowed; an existing — or already
-  # ambiguous — id is rejected. Singletons pass no --id (their add is an upsert)
-  # and are therefore exempt.
-  if [[ -n "$id" ]]; then
+  if [[ -n "$id" && $dry -eq 0 ]]; then
     local resolved rc=0
     resolved="$(registry_py instance-type --id "$id" 2>&1)" || rc=$?
     if [[ $rc -eq 0 ]]; then
@@ -103,11 +164,20 @@ cmd_add() {
       die "id '$id' already exists ($resolved)"
     fi
   fi
-  # Validate required flags from the handler's declared add_schema.
-  local schema missing
+  local schema missing_json
   schema="$(registry_py add-schema --type "$job_type")"
-  missing="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/contract.py" missing-required --schema "$schema" -- "${passthrough[@]}" 2>&1)" || {
-    [[ -n "$missing" ]] && die "add-job --type $job_type missing required flags: $missing"
+  missing_json="$("$LOCAL_JOBS_PYTHON" "$LOCAL_JOBS_HOME/lib/contract.py" missing-required --schema "$schema" -- "${passthrough[@]}" 2>&1)" || {
+    if [[ -n "$missing_json" && "$missing_json" == \[* ]]; then
+      local msg
+      msg="$("$LOCAL_JOBS_PYTHON" - "$missing_json" <<'PY'
+import json, sys
+m = json.loads(sys.argv[1])
+print("; ".join(f"{x['flag']} ({x['help']})" for x in m))
+PY
+)"
+      die "add-job --type $job_type missing required flags: $msg"
+    fi
+    [[ -n "$missing_json" ]] && die "add-job --type $job_type missing required flags: $missing_json"
     die "add-job --type $job_type: invalid flags"
   }
   dispatch_handler "$job_type" add "${passthrough[@]}"
@@ -233,14 +303,20 @@ cmd_simple() { # enable/disable
 }
 
 cmd_doctor() {
+  local plain=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --plain) plain=1 ;;
+      *) die "unknown doctor option: $1" ;;
+    esac
+    shift
+  done
   local failed=0 t
   while IFS= read -r t; do
     [[ -n "$t" ]] || continue
     printf '\n== doctor: %s ==\n' "$t"
     dispatch_handler "$t" doctor || failed=1
   done < <(registry_py job-types)
-  # Cross-type drift scan: surface (and record as drift events) any instance
-  # whose loaded state disagrees with its enabled state, or any quarantined type.
   printf '\n== doctor: drift scan ==\n'
   local dash_json
   dash_json="$(registry_py dashboard --json)"
@@ -266,6 +342,14 @@ for inst in payload.get("instances", []):
 print("  no drift" if issues == 0 else f"  {issues} drift/quarantine issue(s)")
 sys.exit(1 if issues else 0)
 PY
+  if (( plain == 1 )); then
+    printf '\n== operator summary ==\n'
+    registry_py dashboard --brief || true
+    for inst in $(printf '%s' "$dash_json" | "$LOCAL_JOBS_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(i["id"] for i in d["instances"] if i.get("drift")))'); do
+      [[ -n "$inst" ]] || continue
+      registry_py explain-job --id "$inst" 2>/dev/null || true
+    done
+  fi
   return "$failed"
 }
 
@@ -277,6 +361,9 @@ main() {
     help) usage ;;
     view) cmd_view "$@" ;;
     dashboard) cmd_dashboard "$@" ;;
+    explain-job) cmd_explain_job "$@" ;;
+    resolve-instance) cmd_resolve_instance "$@" ;;
+    list-types) cmd_list_types "$@" ;;
     add) cmd_add "$@" ;;
     update) cmd_update "$@" ;;
     delete) cmd_delete "$@" ;;

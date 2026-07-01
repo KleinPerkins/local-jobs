@@ -202,12 +202,24 @@ def _field_name(spec: dict[str, Any]) -> str:
     return spec["flag"].lstrip("-").replace("-", "_")
 
 
-def missing_required(add_schema: list[dict[str, Any]], argv: list[str]) -> list[str]:
+def _field_help(spec: dict[str, Any]) -> str:
+    return str(spec.get("help") or spec.get("description") or spec.get("flag", ""))
+
+
+def missing_required(add_schema: list[dict[str, Any]], argv: list[str]) -> list[dict[str, str]]:
+    """Return missing required flags as ``{flag, help}`` objects for operator UX."""
     present = set()
     for tok in argv:
         if tok.startswith("--"):
             present.add(tok.split("=", 1)[0])
-    return [f["flag"] for f in add_schema if isinstance(f, dict) and f.get("required") and f["flag"] not in present]
+    out: list[dict[str, str]] = []
+    for spec in add_schema:
+        if not isinstance(spec, dict) or not spec.get("required"):
+            continue
+        flag = spec["flag"]
+        if flag not in present:
+            out.append({"flag": flag, "help": _field_help(spec)})
+    return out
 
 
 def main() -> int:
@@ -268,7 +280,7 @@ def main() -> int:
             rest = rest[1:]
         miss = missing_required(schema, rest)
         if miss:
-            print(" ".join(miss), file=sys.stderr)
+            print(json.dumps(miss), file=sys.stderr)
             return 2
         print("ok")
         return 0

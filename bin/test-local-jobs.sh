@@ -350,6 +350,67 @@ PY
   "$PY" "$SB/lib/authoring.py" unregister --type wedge >/dev/null 2>&1; rm -f "$SB/handlers/wedge.sh"
 }
 
+# ---- operator UX (v2): resolve, list-types, narrative, dry-run ------------
+test_operator_ux() {
+  echo "== operator UX (v2) =="
+  # resolve-instance
+  CLI resolve-instance --query demo | grep -q $'\tincremental-git-fetch' && ok "resolve exact id" || bad "resolve exact"
+  CLI resolve-instance --query repos/demo | grep -q demo && ok "resolve path substring" || bad "resolve path"
+  rc=0; out="$(CLI resolve-instance --query zznonexistentzz 2>&1)" || rc=$?
+  [[ $rc -eq 1 ]] && ok "resolve zero-match exit 1" || bad "resolve zero rc=$rc"
+  CLI add-job --type command --id amb-a --program /bin/echo --schedule 01:01 >/dev/null 2>&1 || true
+  CLI add-job --type command --id amb-b --program /bin/echo --schedule 02:02 >/dev/null 2>&1 || true
+  rc=0; out="$(CLI resolve-instance --query amb 2>&1)" || rc=$?
+  [[ $rc -eq 2 && "$out" == *ambiguous* ]] && ok "resolve ambiguous exit 2" || bad "resolve ambiguous rc=$rc"
+  CLI delete-job --id amb-a --confirm >/dev/null 2>&1 || true
+  CLI delete-job --id amb-b --confirm >/dev/null 2>&1 || true
+
+  # list-types
+  CLI list-types --plain | grep -q command && ok "list-types --plain" || bad "list-types plain"
+  CLI list-types --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert any(t.get("add_schema") for t in d)' && ok "list-types --json add_schema" || bad "list-types json"
+
+  # rich validation errors
+  rc=0; out="$(CLI add-job --type command --id bare2 --schedule=05:05 2>&1)" || rc=$?
+  [[ $rc -ne 0 && "$out" == *"--program"* && "$out" == *executable* ]] && ok "missing-field help text" || bad "missing-field help"
+
+  # pause/resume aliases
+  local pid="pausejob"
+  CLI add-job --type command --id "$pid" --program /bin/echo --schedule 07:07 >/dev/null 2>&1 && ok "pause seed add" || bad "pause seed"
+  CLI pause-job --id "$pid" >/dev/null 2>&1 && ok "pause-job alias" || bad "pause alias"
+  CLI resume-job --id "$pid" >/dev/null 2>&1 && ok "resume-job alias" || bad "resume alias"
+  CLI delete-job --id "$pid" --confirm >/dev/null 2>&1 || true
+
+  # narrative layer
+  CLI dashboard --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert "next_actions" in d and "health_verdict" in d and "recent_runs" in d' \
+    && ok "dashboard v2 fields" || bad "dashboard v2 fields"
+  CLI dashboard --brief | grep -q . && ok "dashboard --brief" || bad "dashboard brief"
+  # recent_runs excludes doctor noise
+  CLI dashboard --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert all(r.get("kind")=="run" for r in d.get("recent_runs",[]))' \
+    && ok "recent_runs runs-only" || bad "recent_runs filter"
+
+  # drift fixture → next_actions + explain
+  local did="driftux"
+  CLI add-job --type command --id "$did" --program /bin/echo --schedule 08:08 >/dev/null 2>&1
+  printf '%s\n' '<plist version="1.0"><dict/></plist>' > "$SB/agents/com.kleinperkins.local-jobs.command.${did}.plist"
+  CLI dashboard --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert any(a.get("verb")=="repair" for a in d.get("next_actions",[]))' \
+    && ok "next_actions repair hint" || bad "next_actions repair"
+  CLI dashboard --brief | grep -qi repair && ok "brief repair hint" || bad "brief repair"
+  CLI explain-job --id "$did" | grep -qi drift && ok "explain-job drift" || bad "explain drift"
+  CLI delete-job --id "$did" --confirm >/dev/null 2>&1 || true
+
+  # add-job --dry-run
+  local dj="dryjob"
+  local plist="$SB/agents/com.kleinperkins.local-jobs.command.${dj}.plist"
+  CLI add-job --type command --id "$dj" --program /bin/echo --schedule 09:09 --dry-run | is_json \
+    && ok "add dry-run JSON" || bad "add dry-run json"
+  [[ ! -f "$plist" ]] && ok "dry-run no plist" || bad "dry-run wrote plist"
+  ! H command list-instances | "$PY" -c 'import json,sys; assert any(i["id"]=="'"$dj"'" for i in json.load(sys.stdin))' 2>/dev/null \
+    && ok "dry-run no store row" || bad "dry-run store row"
+  CLI add-job --type command --id "$dj" --program /bin/echo --schedule 09:09 >/dev/null 2>&1 \
+    && ok "add after dry-run" || bad "add after dry-run"
+  CLI delete-job --id "$dj" --confirm >/dev/null 2>&1 || true
+}
+
 # ---- dashboard + events schema --------------------------------------------
 test_dashboard_events() {
   echo "== dashboard + events =="
@@ -365,6 +426,7 @@ main() {
   test_command_lifecycle; echo
   test_quarantine; echo
   test_dashboard_events; echo
+  test_operator_ux; echo
   if [[ "$MODE" != "quick" ]]; then
     test_cpp_archive; echo
     test_igf; echo

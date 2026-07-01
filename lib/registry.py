@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -171,6 +172,62 @@ def collect_instances(reg: dict[str, Any]) -> list[dict[str, Any]]:
     return instances
 
 
+def _score_match(query: str, text: str) -> int:
+    """Higher score = better match. 0 = no match."""
+    if not query or not text:
+        return 0
+    q, t = query.lower(), text.lower()
+    if q == t:
+        return 100
+    if t.startswith(q):
+        return 80
+    if q in t:
+        return 50
+    return 0
+
+
+def resolve_instance(query: str, reg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Score instances and registry types against a free-text query."""
+    reg = reg or load_registry()
+    hits: dict[str, dict[str, Any]] = {}
+
+    def _add(iid: str, jtype: str, score: int, field: str) -> None:
+        if score <= 0:
+            return
+        key = f"{jtype}:{iid}"
+        prev = hits.get(key)
+        if prev is None or score > prev["score"]:
+            hits[key] = {"id": iid, "type": jtype, "score": score, "matched": field}
+
+    for jtype, meta in job_types(reg).items():
+        desc = (meta or {}).get("description") or ""
+        for field, text in (("type", jtype), ("description", desc)):
+            sc = _score_match(query, text)
+            if sc >= 50:
+                _add(jtype, jtype, sc, field)
+        hdesc = handler_describe(jtype, reg)
+        if hdesc.get("cardinality") == "singleton":
+            sid = hdesc.get("label_token") or jtype
+            sc = _score_match(query, sid)
+            if sc >= 50:
+                _add(sid, jtype, sc, "singleton_id")
+
+    for jtype in job_types(reg):
+        for inst in handler_list_instances(jtype, reg):
+            if not isinstance(inst, dict) or inst.get("role") == "error":
+                continue
+            iid = inst.get("id") or ""
+            for field in ("id", "path", "program", "launchd_label"):
+                val = inst.get(field)
+                if isinstance(val, str):
+                    sc = _score_match(query, val)
+                    if sc > 0:
+                        _add(iid, jtype, sc, field)
+
+    ranked = sorted(hits.values(), key=lambda h: (-h["score"], h["id"]))
+    return ranked
+
+
 def instance_type(instance_id: str, reg: dict[str, Any] | None = None) -> str:
     """Resolve the single job type that owns ``instance_id``.
 
@@ -186,7 +243,13 @@ def instance_type(instance_id: str, reg: dict[str, Any] | None = None) -> str:
                 matches.append(jtype)
                 break  # this type owns the id; stop scanning its instances
     if not matches:
-        raise SystemExit(f"unknown instance: {instance_id}")
+        msg = f"unknown instance: {instance_id}"
+        if ID_LIKE.match(instance_id):
+            suggestions = resolve_instance(instance_id, reg)[:3]
+            if suggestions:
+                hints = ", ".join(f"{s['id']} ({s['type']})" for s in suggestions)
+                msg += f"; did you mean: {hints}?"
+        raise SystemExit(msg)
     if len(matches) > 1:
         joined = ", ".join(sorted(matches))
         raise SystemExit(
@@ -194,6 +257,9 @@ def instance_type(instance_id: str, reg: dict[str, Any] | None = None) -> str:
             f"re-run with --type <type> to disambiguate"
         )
     return matches[0]
+
+
+ID_LIKE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def managed_labels(reg: dict[str, Any], instances: list[dict[str, Any]] | None = None) -> set[str]:
@@ -324,17 +390,101 @@ def add_schema(job_type: str) -> int:
     return 0
 
 
-def dashboard(as_json: bool) -> int:
+def build_list_types(reg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Aggregate handler describe + registry metadata for list-types --json."""
+    out: list[dict[str, Any]] = []
+    for slug, meta in job_types(reg).items():
+        desc = handler_describe(slug, reg)
+        singleton_id = None
+        if desc.get("cardinality") == "singleton":
+            singleton_id = desc.get("label_token") or slug
+        out.append({
+            "slug": slug,
+            "description": (meta or {}).get("description") or desc.get("type") or slug,
+            "cardinality": desc.get("cardinality"),
+            "singleton_id": singleton_id,
+            "label_template": desc.get("label_template"),
+            "add_schema": desc.get("add_schema") or [],
+        })
+    return out
+
+
+def print_list_types_plain(types: list[dict[str, Any]]) -> None:
+    for t in types:
+        card = t.get("cardinality") or "?"
+        print(f"{t['slug']} ({card}) — {t.get('description') or ''}")
+        if t.get("singleton_id"):
+            print(f"  singleton id: {t['singleton_id']}")
+        req = [f"{f['flag']}: {f.get('help') or f.get('description') or ''}"
+               for f in (t.get("add_schema") or []) if isinstance(f, dict) and f.get("required")]
+        if req:
+            print(f"  required: {'; '.join(req)}")
+        examples = {
+            "command": "scheduled shell script or binary",
+            "incremental-git-fetch": "keep a reference repo up to date",
+            "cpp-archive": "daily archive of cpp source refs",
+        }
+        if t["slug"] in examples:
+            print(f"  example: {examples[t['slug']]}")
+
+
+def cmd_resolve_instance(query: str, as_json: bool) -> int:
+    reg = load_registry()
+    matches = resolve_instance(query, reg)
+    if len(matches) == 1:
+        m = matches[0]
+        if as_json:
+            print(json.dumps(m, indent=2))
+        else:
+            print(f"{m['id']}\t{m['type']}")
+        return 0
+    if len(matches) == 0:
+        if as_json:
+            print(json.dumps({"matches": [], "suggestions": []}, indent=2))
+        else:
+            print("no matches", file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps({"matches": matches, "ambiguous": True}, indent=2))
+    else:
+        print("ambiguous matches:", file=sys.stderr)
+        for m in matches[:10]:
+            print(f"  {m['id']} ({m['type']}) — matched {m.get('matched')}", file=sys.stderr)
+        print("hint: re-run with --type <type>", file=sys.stderr)
+    return 2
+
+
+def dashboard(as_json: bool, brief: bool = False) -> int:
     # Delegates to lib/dashboard.py for the richer payload (Phase 7).
     from importlib import import_module
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     dash = import_module("dashboard")
     payload = dash.build_dashboard(load_registry())
+    if brief:
+        dash.print_brief(payload)
+        return 0
     if as_json:
         print(json.dumps(payload, indent=2))
     else:
         dash.print_dashboard(payload)
+    return 0
+
+
+def cmd_explain_job(job_id: str, job_type: str | None, as_json: bool) -> int:
+    from importlib import import_module
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    dash = import_module("dashboard")
+    reg = load_registry()
+    if not job_type:
+        job_type = instance_type(job_id, reg)
+    payload = dash.build_dashboard(reg)
+    explain = dash.build_explain(job_id, job_type, payload)
+    if as_json:
+        print(json.dumps(explain, indent=2))
+    else:
+        dash.print_explain(explain)
     return 0
 
 
@@ -356,8 +506,22 @@ def main() -> int:
 
     p_types = sub.add_parser("job-types")
 
+    p_list_types = sub.add_parser("list-types")
+    p_list_types.add_argument("--plain", action="store_true")
+    p_list_types.add_argument("--json", action="store_true")
+
+    p_resolve = sub.add_parser("resolve-instance")
+    p_resolve.add_argument("--query", required=True)
+    p_resolve.add_argument("--json", action="store_true")
+
+    p_explain = sub.add_parser("explain-job")
+    p_explain.add_argument("--id", required=True)
+    p_explain.add_argument("--type", default=None)
+    p_explain.add_argument("--json", action="store_true")
+
     p_dash = sub.add_parser("dashboard")
     p_dash.add_argument("--json", action="store_true")
+    p_dash.add_argument("--brief", action="store_true")
 
     args = parser.parse_args()
     if args.cmd == "handler-path":
@@ -374,8 +538,20 @@ def main() -> int:
         for jtype in job_types(load_registry()):
             print(jtype)
         return 0
+    if args.cmd == "list-types":
+        reg = load_registry()
+        types = build_list_types(reg)
+        if args.json:
+            print(json.dumps(types, indent=2))
+        else:
+            print_list_types_plain(types)
+        return 0
+    if args.cmd == "resolve-instance":
+        return cmd_resolve_instance(args.query, args.json)
+    if args.cmd == "explain-job":
+        return cmd_explain_job(args.id, args.type, args.json)
     if args.cmd == "dashboard":
-        return dashboard(args.json)
+        return dashboard(args.json, args.brief)
     return 1
 
 

@@ -5,6 +5,27 @@ Every job type is a self-contained handler at `handlers/<type>.sh`. The core
 types from `config/registry.yml` and drives each handler purely through the
 verbs below. Adding a new type never requires editing the core.
 
+## Top-level CLI verbs (`bin/local-jobs.sh`)
+
+These are operator-facing commands routed by the core (not handler ABI):
+
+| Verb | Purpose |
+|---|---|
+| `view-jobs` | Managed instances + discovered `com.kleinperkins.*` agents |
+| `dashboard [--json\|--brief]` | Rich `dashboard/v1` payload or plain-English summary |
+| `explain-job --id <id>` | Narrative troubleshooting + suggested commands |
+| `resolve-instance --query <text>` | Fuzzy job discovery (exit 0/1/2) |
+| `list-types [--plain\|--json]` | Type catalog with `add_schema` in JSON mode |
+| `add-job [--dry-run]` | Create instance (preview with `--dry-run`) |
+| `update-job` / `delete-job` / `run-job` / `logs-job` | Instance lifecycle |
+| `enable-job` / `disable-job` | Toggle scheduling (`pause-job`/`resume-job` aliases) |
+| `repair-job` / `doctor [--plain]` | Convergence + health |
+| `adopt-job` | Import unmanaged LaunchAgent |
+| `add-job-type` / `update-job-type` | Type authoring (agent-mediated) |
+
+`dashboard/v1` JSON adds (v2, additive): `health_verdict`, `next_actions[]`,
+`recent_runs[]`, per-instance `stale`, `hours_since_success`.
+
 A handler is invoked as `handlers/<type>.sh <verb> [args]`.
 
 ## Verbs
