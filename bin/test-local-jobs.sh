@@ -31,6 +31,8 @@ pass=0; fail=0
 ok()  { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 is_json() { "$PY" -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; }
+# Portable (Linux CI + macOS) file fingerprint: md5 of contents, or "absent".
+plist_state() { if [[ -f "$1" ]]; then "$PY" -c 'import hashlib,sys; print(hashlib.md5(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; else printf 'absent'; fi; }
 
 SB=""
 cleanup() { [[ -n "$SB" && -d "$SB" ]] && rm -rf "$SB"; }
@@ -155,6 +157,22 @@ test_cpp_archive() {
   CLI add-job --type cpp-archive --schedule 19:30 >/dev/null 2>&1 && ok "cpp-archive singleton upsert" || bad "cpp-archive upsert"
   sched="$(H cpp-archive view --id cpp-archive | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["schedule"])')"
   [[ "$sched" == "19:30" ]] && ok "cpp-archive reschedule" || bad "cpp-archive reschedule=$sched"
+
+  # add-job --dry-run on the singleton: preview ONLY — no store write, no plist
+  # change (the singleton plist already exists from the enable/upsert above, so
+  # assert its contents are untouched rather than absent).
+  local dryplist="$SB/agents/com.kleinperkins.local-jobs.cpp-archive.plist"
+  local sched_before pl_before sched_after pl_after
+  sched_before="$(H cpp-archive view --id cpp-archive | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["schedule"])')"
+  pl_before="$(plist_state "$dryplist")"
+  CLI add-job --type cpp-archive --schedule 21:45 --dry-run | is_json && ok "cpp-archive dry-run JSON" || bad "cpp-archive dry-run json"
+  CLI add-job --type cpp-archive --schedule 21:45 --dry-run \
+    | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert d.get("dry_run") is True and d.get("would_upsert") is True and d.get("type")=="cpp-archive", d' \
+    && ok "cpp-archive dry-run preview (would_upsert)" || bad "cpp-archive dry-run preview"
+  sched_after="$(H cpp-archive view --id cpp-archive | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["schedule"])')"
+  pl_after="$(plist_state "$dryplist")"
+  [[ "$sched_after" == "$sched_before" ]] && ok "cpp-archive dry-run no store write" || bad "cpp-archive dry-run wrote store ($sched_before->$sched_after)"
+  [[ "$pl_after" == "$pl_before" ]] && ok "cpp-archive dry-run no plist change" || bad "cpp-archive dry-run touched plist"
 }
 
 # ---- incremental-git-fetch (dry-run, hermetic) -----------------------------
@@ -369,6 +387,13 @@ test_operator_ux() {
   CLI list-types --plain | grep -q command && ok "list-types --plain" || bad "list-types plain"
   CLI list-types --json | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert any(t.get("add_schema") for t in d)' && ok "list-types --json add_schema" || bad "list-types json"
 
+  # describe-types superset (schema_version + update-field matrix; id not updatable)
+  CLI describe-types | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert all("update_fields" in t and "schema_version" in t for t in d) and any(f["flag"]=="--id" and f["updatable"] is False for t in d for f in t.get("update_fields",[]))' \
+    && ok "describe-types superset + update matrix" || bad "describe-types superset"
+  # builder-snapshot feed (types + current instances, valid JSON, no error rows)
+  "$SB/bin/generate-job-builder-snapshot.sh" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); assert d["schema"]=="job-builder-snapshot/v1" and isinstance(d["types"],list) and isinstance(d["instances"],list) and all(i.get("role")!="error" for i in d["instances"])' \
+    && ok "builder-snapshot JSON" || bad "builder-snapshot"
+
   # rich validation errors
   rc=0; out="$(CLI add-job --type command --id bare2 --schedule=05:05 2>&1)" || rc=$?
   [[ $rc -ne 0 && "$out" == *"--program"* && "$out" == *executable* ]] && ok "missing-field help text" || bad "missing-field help"
@@ -396,6 +421,10 @@ test_operator_ux() {
     && ok "next_actions repair hint" || bad "next_actions repair"
   CLI dashboard --brief | grep -qi repair && ok "brief repair hint" || bad "brief repair"
   CLI explain-job --id "$did" | grep -qi drift && ok "explain-job drift" || bad "explain drift"
+  # doctor --plain emits the operator narrative (summary header + plain-English remediation)
+  local doc; doc="$(CLI doctor --plain 2>/dev/null)"
+  printf '%s' "$doc" | grep -q 'operator summary' && ok "doctor --plain operator summary" || bad "doctor --plain summary"
+  printf '%s' "$doc" | grep -qi 'repair' && ok "doctor --plain remediation line" || bad "doctor --plain remediation"
   CLI delete-job --id "$did" --confirm >/dev/null 2>&1 || true
 
   # add-job --dry-run
