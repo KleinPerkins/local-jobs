@@ -1,0 +1,28 @@
+name: baseline
+
+# BEGIN KleinPerkins/dev baseline (managed by KleinPerkins/dev; do not hand-edit — see _ops/baseline/README.md in KleinPerkins/dev)
+# Minimal, portable control-floor check. Fully self-contained: no dependency on ~/dev paths at
+# CI runtime — the verifier is vendored into THIS repo at .github/scripts/baseline-verify.sh.
+# The required check name is stable: "baseline" (the job id below). Re-render with:
+#   repo-baseline.sh apply <repo>   (run from a KleinPerkins/dev checkout)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Baseline verify (vendored, portable — no ~/dev dependency)
+        run: bash .github/scripts/baseline-verify.sh
+# END KleinPerkins/dev baseline
