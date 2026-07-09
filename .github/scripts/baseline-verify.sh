@@ -19,7 +19,7 @@ pass() { printf '  PASS  %s\n' "$1"; }
 bad()  { printf '  FAIL  %s\n' "$1"; fail=1; }
 
 echo "== baseline-verify: required files present =="
-for rel in SECURITY.md .github/CODEOWNERS .github/workflows/baseline.yml .github/scripts/baseline-verify.sh; do
+for rel in SECURITY.md .github/CODEOWNERS .github/workflows/baseline.yml .github/scripts/baseline-verify.sh .github/dependabot.yml; do
   if [ -f "$ROOT/$rel" ]; then pass "$rel present"; else bad "$rel MISSING"; fi
 done
 
