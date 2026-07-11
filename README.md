@@ -27,3 +27,5 @@ Then verify through the global engine:
 ~/.cursor/skills/local-jobs/scripts/local-jobs.sh list-types --plain
 ~/.cursor/skills/local-jobs/scripts/local-jobs.sh doctor --plain
 ```
+
+Pull requests are protected by runnerless v3 verification.
