@@ -9,7 +9,11 @@ name: baseline
 on:
   push:
     branches: [main]
+    # Cost control: skip the floor check on AGENTS.md-only commits (continual-learning memory
+    # churn). Fleet-wide via re-apply. See _ops/plans/local-ci-migration.md (Phase 1).
+    paths-ignore: ['AGENTS.md']
   pull_request:
+    paths-ignore: ['AGENTS.md']
 
 permissions:
   contents: read
