@@ -1,30 +1,30 @@
 {
-  "version": "pr-automation-verification/v1",
   "jobs": [
     {
-      "id": "verify-repository-contract",
-      "image": "bitnami/git@sha256:b1d6b2cfb6f743b33a48c145ac61c64e630d9dd24129f07acb6d2cbb59b8f5dd",
       "argv": [
         "repository-contract"
       ],
-      "environment": {
-        "CI": "true"
-      },
-      "network": "none",
       "discovery": {
         "kind": "literal_stdout",
         "literal": "PR_AUTOMATION_VERIFY_OK"
       },
+      "environment": {
+        "CI": "true"
+      },
+      "id": "verify-repository-contract",
+      "image": "bitnami/git@sha256:b1d6b2cfb6f743b33a48c145ac61c64e630d9dd24129f07acb6d2cbb59b8f5dd",
       "limits": {
-        "timeout_seconds": 120,
         "cpus_millis": 500,
-        "memory_mib": 256,
-        "pids": 32,
         "disk_mib": 128,
         "inodes": 4096,
-        "output_bytes": 32768
-      }
+        "memory_mib": 256,
+        "output_bytes": 32768,
+        "pids": 32,
+        "timeout_seconds": 120
+      },
+      "network": "none"
     }
   ],
-  "secondary_sources": []
+  "secondary_sources": [],
+  "version": "pr-automation-verification/v1"
 }
