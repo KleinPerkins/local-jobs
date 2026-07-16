@@ -1,25 +1,25 @@
 {
-  "version": "pr-automation/v3",
-  "repository_id": 1284625858,
-  "owner": "KleinPerkins",
-  "name": "local-jobs",
-  "default_branch": "main",
-  "activation_generation": 2,
+  "activation_generation": 3,
   "check_name": "pr-automation / verify",
-  "verifier_app_id": 4274739,
-  "verifier_integration_id": 4274739,
-  "reviewer_app_id": 4269364,
-  "reviewer_integration_id": 4269364,
+  "controller_release_digest": "sha256:b08eea4783e8b2dd0e847a213e68faab4edd91d239827d061c684f7e528bccf5",
+  "default_branch": "main",
+  "max_changed_files": 200,
+  "max_total_patch_bytes": 5000000,
+  "name": "local-jobs",
+  "owner": "KleinPerkins",
   "protected_paths": [
     ".github",
     "CODEOWNERS",
     "_ops"
   ],
+  "repository_id": 1284625858,
+  "reviewer_app_id": 4269364,
+  "reviewer_integration_id": 4269364,
   "ruleset_fingerprints": [
     "sha256:903f1f66c4f3519378395d2c04cc31465fcc0188e07028cd8b3f9d8ad1f1e28f",
     "sha256:959ee027bbabd0f294b12373fe9865c82440a6cd38e7bd2a7fc7d0bea4f1958e"
   ],
-  "max_changed_files": 200,
-  "max_total_patch_bytes": 5000000,
-  "controller_release_digest": "sha256:018797d676749cc4e4e5abfe063a71c2a13540b220d3fa898748932bdd3cb961"
+  "verifier_app_id": 4274739,
+  "verifier_integration_id": 4274739,
+  "version": "pr-automation/v3"
 }
