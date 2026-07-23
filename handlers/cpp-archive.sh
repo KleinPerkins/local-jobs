@@ -27,6 +27,8 @@ HANDLER_FIELD_DEFAULTS='{"enabled":true,"schedule":"18:00"}'
 HANDLER_REQUIRED_FIELDS='[]'
 HANDLER_ADD_SCHEMA='[
   {"flag":"--schedule","field":"schedule","kind":"scalar","required":false,"help":"HH:MM (default 18:00)"},
+  {"flag":"--display-name","field":"display_name","kind":"scalar","help":"human-friendly name shown on the dashboard"},
+  {"flag":"--description","field":"description","kind":"scalar","help":"one-line description of what this job does"},
   {"flag":"--enabled","field":"enabled","kind":"bool","help":"true | false"}
 ]'
 
