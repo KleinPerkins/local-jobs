@@ -12,7 +12,7 @@
         "CI": "true"
       },
       "id": "verify-repository-contract",
-      "image": "bitnami/git@sha256:b1d6b2cfb6f743b33a48c145ac61c64e630d9dd24129f07acb6d2cbb59b8f5dd",
+      "image": "buildpack-deps@sha256:877e9e4d949edfbcbedabc3a2d7ab593955fee5d6d0777adf3a991eb30c750d8",
       "limits": {
         "cpus_millis": 500,
         "disk_mib": 128,
