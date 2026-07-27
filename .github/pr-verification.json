@@ -17,7 +17,7 @@
         "cpus_millis": 500,
         "disk_mib": 128,
         "inodes": 4096,
-        "memory_mib": 256,
+        "memory_mib": 512,
         "output_bytes": 32768,
         "pids": 32,
         "timeout_seconds": 120
