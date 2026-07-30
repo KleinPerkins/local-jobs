@@ -16,8 +16,7 @@
   "reviewer_app_id": 4269364,
   "reviewer_integration_id": 4269364,
   "ruleset_fingerprints": [
-    "sha256:903f1f66c4f3519378395d2c04cc31465fcc0188e07028cd8b3f9d8ad1f1e28f",
-    "sha256:959ee027bbabd0f294b12373fe9865c82440a6cd38e7bd2a7fc7d0bea4f1958e"
+    "sha256:903f1f66c4f3519378395d2c04cc31465fcc0188e07028cd8b3f9d8ad1f1e28f"
   ],
   "verifier_app_id": 4274739,
   "verifier_integration_id": 4274739,
