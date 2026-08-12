@@ -1,7 +1,7 @@
 {
   "activation_generation": 3,
   "check_name": "pr-automation / verify",
-  "controller_release_digest": "sha256:9efa7193d2b63908e0fca9dc1c259971aea0eb324901ed03435daef39710b85a",
+  "controller_release_digest": "sha256:ad9f9d85d2dc80745f03e275da3a161a6cf3566f8d22053fff04c3e88a1739ef",
   "default_branch": "main",
   "max_changed_files": 200,
   "max_total_patch_bytes": 5000000,
