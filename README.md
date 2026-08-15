@@ -28,4 +28,7 @@ Then verify through the global engine:
 ~/.cursor/skills/local-jobs/scripts/local-jobs.sh doctor --plain
 ```
 
+G4 informational proof: the repository-owned overlay contract now runs without an installed global
+engine and catches source/install identity drift.
+
 Pull requests are protected by runnerless v3 verification.
