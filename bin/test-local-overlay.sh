@@ -75,45 +75,29 @@ handler_main() {
   case "$verb" in
     describe) handler_describe ;;
     run) handler_do_run "$@" ;;
-    *) hl_die "test chassis supports describe and run only" ;;
+    test-launchd-env) handler_launchd_env ;;
+    test-working-dir) handler_working_dir ;;
+    *) hl_die "test chassis supports describe, run, and test introspection only" ;;
   esac
 }
 SH
 
-cat >"$SB/fake-archive/bin/archive-cpp-local.sh" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "${CPP_ARCHIVE_DRY_RUN:-}" == "1" ]] || {
-  printf 'expected dry-run flag\n' >&2
-  exit 11
-}
-[[ "${CPP_ARCHIVE_SOURCE_REPO:-}" == "${ARCHIVE_FIXTURE_SOURCE:?}" ]] || {
-  printf 'unexpected source repository\n' >&2
-  exit 12
-}
-[[ "${CPP_ARCHIVE_TARGET_REMOTE:-}" == "${ARCHIVE_FIXTURE_REMOTE:?}" ]] || {
-  printf 'unexpected target remote\n' >&2
-  exit 13
-}
-if [[ "${ARCHIVE_FIXTURE_FAIL:-0}" == "1" ]]; then
-  printf 'archive fixture failed\n'
-  exit 7
-fi
-printf 'archive fixture ok\n'
-SH
-chmod +x "$SB/fake-archive/bin/archive-cpp-local.sh"
+ln -s /usr/bin/env "$SB/fake-archive/bin/archive-cpp-local.sh"
+mkdir -p "$SB/home"
+handler_env=(
+  env -i
+  "PATH=$PATH"
+  "HOME=$SB/home"
+  "LOCAL_JOBS_HOME=$SB/engine"
+  "LOCAL_JOBS_STATE=$SB/state"
+  "LOCAL_JOBS_CPP_ARCHIVE_CONFIG=$SB/state/jobs/cpp-archive.yml"
+  "CPP_ARCHIVE_HOME=$SB/fake-archive"
+  "CPP_ARCHIVE_SOURCE_REPO=$SB/source"
+  "CPP_ARCHIVE_TARGET_REMOTE=dry-run-target"
+)
 
-export LOCAL_JOBS_HOME="$SB/engine"
-export LOCAL_JOBS_STATE="$SB/state"
-export LOCAL_JOBS_CPP_ARCHIVE_CONFIG="$SB/state/jobs/cpp-archive.yml"
-export CPP_ARCHIVE_HOME="$SB/fake-archive"
-export CPP_ARCHIVE_SOURCE_REPO="$SB/source"
-export CPP_ARCHIVE_TARGET_REMOTE="dry-run-target"
-export ARCHIVE_FIXTURE_SOURCE="$CPP_ARCHIVE_SOURCE_REPO"
-export ARCHIVE_FIXTURE_REMOTE="$CPP_ARCHIVE_TARGET_REMOTE"
-
-describe_output="$("$LOCAL_REPO/handlers/cpp-archive.sh" describe)"
-EXPECTED_CONFIG="$LOCAL_JOBS_CPP_ARCHIVE_CONFIG" "$PY" -c '
+describe_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" describe)"
+EXPECTED_CONFIG="$SB/state/jobs/cpp-archive.yml" "$PY" -c '
 import json
 import os
 import sys
@@ -133,38 +117,57 @@ assert [field["flag"] for field in record["add_schema"]] == [
 ], record
 ' <<<"$describe_output"
 
-run_output="$("$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run)"
-"$PY" -c '
+launchd_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" test-launchd-env)"
+EXPECTED_SOURCE="$SB/source" "$PY" -c '
 import json
+import os
+import sys
+
+record = json.load(sys.stdin)
+assert record == {
+    "CPP_ARCHIVE_SOURCE_REPO": os.environ["EXPECTED_SOURCE"],
+    "CPP_ARCHIVE_TARGET_REMOTE": "dry-run-target",
+}, record
+' <<<"$launchd_output"
+
+working_dir="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" test-working-dir)"
+[[ "$working_dir" == "$SB/fake-archive" ]] || fail "handler working directory is not the archive home"
+
+run_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run)"
+EXPECTED_SOURCE="$SB/source" "$PY" -c '
+import json
+import os
 import sys
 
 lines = sys.stdin.read().splitlines()
-assert "archive fixture ok" in lines, lines
+environment = dict(line.split("=", 1) for line in lines if "=" in line)
+assert environment["CPP_ARCHIVE_DRY_RUN"] == "1", environment
+assert environment["CPP_ARCHIVE_SOURCE_REPO"] == os.environ["EXPECTED_SOURCE"], environment
+assert environment["CPP_ARCHIVE_TARGET_REMOTE"] == "dry-run-target", environment
 records = [
     json.loads(line.removeprefix("@@RUNLOG@@ "))
     for line in lines
     if line.startswith("@@RUNLOG@@ ")
 ]
-assert records == [{
-    "status": "dry-run",
-    "fields": {"exit_code": 0, "last_line": "archive fixture ok"},
-}], records
+assert len(records) == 1, records
+assert records[0]["status"] == "dry-run", records
+assert records[0]["fields"]["exit_code"] == 0, records
 ' <<<"$run_output"
 
+rm "$SB/fake-archive/bin/archive-cpp-local.sh"
+ln -s /usr/bin/false "$SB/fake-archive/bin/archive-cpp-local.sh"
 set +e
 failure_output="$(
-  ARCHIVE_FIXTURE_FAIL=1 \
-    "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run 2>&1
+  "${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run 2>&1
 )"
 failure_rc=$?
 set -e
-[[ "$failure_rc" -eq 7 ]] || fail "handler did not preserve archive failure exit 7 (got $failure_rc)"
+[[ "$failure_rc" -eq 1 ]] || fail "handler did not preserve archive failure exit 1 (got $failure_rc)"
 "$PY" -c '
 import json
 import sys
 
 lines = sys.stdin.read().splitlines()
-assert "archive fixture failed" in lines, lines
 records = [
     json.loads(line.removeprefix("@@RUNLOG@@ "))
     for line in lines
@@ -172,7 +175,7 @@ records = [
 ]
 assert records == [{
     "status": "dry-run",
-    "fields": {"exit_code": 7, "last_line": "archive fixture failed"},
+    "fields": {"exit_code": 1, "last_line": ""},
 }], records
 ' <<<"$failure_output"
 
