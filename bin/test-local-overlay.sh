@@ -96,7 +96,7 @@ handler_env=(
   "CPP_ARCHIVE_TARGET_REMOTE=dry-run-target"
 )
 
-describe_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" describe)"
+describe_output="$("${handler_env[@]}" bash "$LOCAL_REPO/handlers/cpp-archive.sh" describe)"
 EXPECTED_CONFIG="$SB/state/jobs/cpp-archive.yml" "$PY" -c '
 import json
 import os
@@ -117,7 +117,7 @@ assert [field["flag"] for field in record["add_schema"]] == [
 ], record
 ' <<<"$describe_output"
 
-launchd_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" test-launchd-env)"
+launchd_output="$("${handler_env[@]}" bash "$LOCAL_REPO/handlers/cpp-archive.sh" test-launchd-env)"
 EXPECTED_SOURCE="$SB/source" "$PY" -c '
 import json
 import os
@@ -130,10 +130,10 @@ assert record == {
 }, record
 ' <<<"$launchd_output"
 
-working_dir="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" test-working-dir)"
+working_dir="$("${handler_env[@]}" bash "$LOCAL_REPO/handlers/cpp-archive.sh" test-working-dir)"
 [[ "$working_dir" == "$SB/fake-archive" ]] || fail "handler working directory is not the archive home"
 
-run_output="$("${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run)"
+run_output="$("${handler_env[@]}" bash "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run)"
 EXPECTED_SOURCE="$SB/source" "$PY" -c '
 import json
 import os
@@ -158,7 +158,7 @@ rm "$SB/fake-archive/bin/archive-cpp-local.sh"
 ln -s /usr/bin/false "$SB/fake-archive/bin/archive-cpp-local.sh"
 set +e
 failure_output="$(
-  "${handler_env[@]}" "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run 2>&1
+  "${handler_env[@]}" bash "$LOCAL_REPO/handlers/cpp-archive.sh" run --id cpp-archive --dry-run 2>&1
 )"
 failure_rc=$?
 set -e
