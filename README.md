@@ -10,8 +10,7 @@ skill payload and reads this repo only through an installed overlay fragment.
 - `overlay/registry.d/cpp-archive.yml` — source template for the overlay entry.
 - `install-overlay.sh` — writes `~/.local-jobs/registry.d/cpp-archive.yml` with an
   absolute executable handler path.
-- `bin/test-local-overlay.sh` — hermetic overlay contract check against the global
-  engine.
+- `bin/test-local-overlay.sh` — self-contained overlay and handler contract check.
 
 Machine state lives under `~/.local-jobs` and is not source-tracked here.
 
