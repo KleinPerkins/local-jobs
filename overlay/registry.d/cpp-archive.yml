@@ -1,3 +1,3 @@
-id: cpp-archive
+id: cpp-archive-g4-required-failure
 description: Daily archive of committed cpp source refs to KleinPerkins/cpp
 handler: __INSTALLED_BY_INSTALL_OVERLAY__
