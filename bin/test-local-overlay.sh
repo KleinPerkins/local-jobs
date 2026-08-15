@@ -176,3 +176,4 @@ assert records == [{
 ' <<<"$failure_output"
 
 printf 'local overlay test passed\n'
+printf 'PR_AUTOMATION_VERIFY_OK\n'
