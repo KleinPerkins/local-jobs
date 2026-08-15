@@ -4,7 +4,8 @@ set -euo pipefail
 
 LOCAL_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="${LOCAL_JOBS_PYTHON:-python3}"
-SB="$(mktemp -d /tmp/lj-local-overlay.XXXXXX)"
+TMP_ROOT="${TMPDIR:-$PWD}"
+SB="$(mktemp -d "$TMP_ROOT/lj-local-overlay.XXXXXX")"
 cleanup() { rm -rf "$SB"; }
 trap cleanup EXIT
 
