@@ -30,4 +30,7 @@ Then verify through the global engine:
 G4 informational proof: the repository-owned overlay contract now runs without an installed global
 engine and catches source/install identity drift.
 
+R5 requiredness proof: the named local overlay contract Check blocks a failing head and permits a
+restored passing head to merge.
+
 Pull requests are protected by runnerless v3 verification.
