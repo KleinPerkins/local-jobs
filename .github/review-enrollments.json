@@ -1,0 +1,130 @@
+{
+  "schema": "g1-review-enrollments/v1",
+  "repository_id": 1284625858,
+  "enabled": true,
+  "producers": [
+    {
+      "id": "enrollment-24c0a5f2",
+      "enabled": true,
+      "origin_account": "origin-7612de79",
+      "github_user_id": 49759187,
+      "instructions_sha256": "7efd718dd897e06155b8e49eca37d18b15fb1e47610d9cf4b2d26e294a99e10b",
+      "cli_version": "codex-cli 0.148.0",
+      "credential_store": "keyring",
+      "allowed_startup_notice_sha256": [
+        "b2fc6975a5637afa2ac999a3260fc7980db0be97b0474c7a8a14c57e18d4a6e1",
+        "de8c81bdbcbc27db4d16d6ea11b6463544d5351492a5b397d3d31af1fbc78ca3"
+      ],
+      "creation_adapter_sha256": "28381b52f0d59372a6f1319e81b83aa9972989a165c783fe64a0ff83df23ab6b",
+      "capture_adapter_sha256": "ef07a9213e9cccffca0f71adbfd4beadc5a3d1fad95ec1a8f326e0afd41e4dc3"
+    },
+    {
+      "id": "enrollment-e876e8eb",
+      "enabled": true,
+      "origin_account": "origin-6a644d43",
+      "github_user_id": 49759187,
+      "instructions_sha256": "7efd718dd897e06155b8e49eca37d18b15fb1e47610d9cf4b2d26e294a99e10b",
+      "cli_version": "codex-cli 0.148.0",
+      "credential_store": "file",
+      "allowed_startup_notice_sha256": [
+        "b2fc6975a5637afa2ac999a3260fc7980db0be97b0474c7a8a14c57e18d4a6e1"
+      ],
+      "creation_adapter_sha256": "28381b52f0d59372a6f1319e81b83aa9972989a165c783fe64a0ff83df23ab6b",
+      "capture_adapter_sha256": "ef07a9213e9cccffca0f71adbfd4beadc5a3d1fad95ec1a8f326e0afd41e4dc3"
+    }
+  ],
+  "governance": {
+    "repository": "KleinPerkins/local-jobs",
+    "scope": "Meaningful hosted overlay/handler contracts, independent originating-account review and existing Chaos Scheduler App-owned native squash. No host installation, live archive, scheduler or controller activation.",
+    "review_trust": "Owner-enrolled operational local capture. Work and personal origins are distinct; a review receipt cannot establish origin. No provider-signature or same-principal anti-forgery claim.",
+    "activation": "Source enrollment is not operational qualification. Retain current controls until the reviewed source lands and final current-main CI, account receipt admission, App readiness and owner-visible bypass policy have been verified. Agents do not merge, bypass checks or manipulate PR auto-merge.",
+    "reference": "Machine Monitor reviewed source 074cd1a82e05b13ef8b4a50f74341cf5a28610e6 and canary CI verifier 75148194a0e8b0f63674a3e441639cc633ca12b8; repository identity and closed three-shard coverage adapted.",
+    "coordination": "The authoring agent automatically captures review, creates the PR/origin witness, and separately publishes the unedited review receipt with the g1-review-receipt:v1 marker. The creation adapter is deliberately origin-only. No human technical-review or receipt-publication step is required.",
+    "administrative_visibility": "The delivery coordinator must inspect exact owner-visible bypass actors before activation. App-scoped omission remains explicitly unknown; App qualification does not attest hidden actors. Visible unexpected actors reject, and Integration/App bypass is unauthorized. This accepted administrative boundary is operational trust, not protection against a privileged owner changing controls after qualification.",
+    "ambiguous_creation": "An ambiguous create/origin-publication response deliberately blocks automatic delivery. The agent preserves the journal and diagnoses actual branch/nonce/PR/comment state read-only. No blind retry, duplicate PR or inferred account witness is authorized; automatic coordination does not require unconditional recovery from unknown origin.",
+    "github_schema_observation": {
+      "observed_on": "2026-11-16",
+      "source": "https://api.github.com/graphql",
+      "query": "query { __type(name: \"EnablePullRequestAutoMergeInput\") { name inputFields { name type { kind name ofType { kind name } } } } }",
+      "response": {
+        "data": {
+          "__type": {
+            "name": "EnablePullRequestAutoMergeInput",
+            "inputFields": [
+              {
+                "name": "clientMutationId",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "String",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "pullRequestId",
+                "type": {
+                  "kind": "NON_NULL",
+                  "name": null,
+                  "ofType": {
+                    "kind": "SCALAR",
+                    "name": "ID"
+                  }
+                }
+              },
+              {
+                "name": "commitHeadline",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "String",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "commitBody",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "String",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "mergeMethod",
+                "type": {
+                  "kind": "ENUM",
+                  "name": "PullRequestMergeMethod",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "authorEmail",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "String",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "expectedHeadOid",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "GitObjectID",
+                  "ofType": null
+                }
+              },
+              {
+                "name": "includeStack",
+                "type": {
+                  "kind": "SCALAR",
+                  "name": "Boolean",
+                  "ofType": null
+                }
+              }
+            ]
+          }
+        }
+      },
+      "scope": "Live public schema observation: expectedHeadOid is a supported GitObjectID input for enablePullRequestAutoMerge. It constrains head only; strict required checks and stale approval dismissal arbitrate base races. Schema availability is not proof of a particular merge."
+    },
+    "delivery_authority": "The Chaos Scheduler App is the only authorized approver/merger and always supplies its own qualifying approval and native squash request. This is an authorization and operating rule, not atomic technical exclusivity. A different write-capable actor may arm auto-merge after the App final check but before its approval, and that approval may release the other request; the operator accepted this limited residual race on 2026-11-17. Observed foreign or unknown auto-merge requests still reject. Other approvals cannot substitute for App admission evidence; unsolicited coexisting approvals are not inherently prohibited. Agents never manually merge, arm/cancel auto-merge or bypass checks. Initial owner/admin bootstrap remains separate.",
+    "g1_execution_authority": "The operator explicitly authorized amended G1-G4 execution for the14 public Actions/App targets, including local-jobs immutableID1284625858. This adopts meaningful sharded standard-hosted GitHub Actions and originating-account independent review/App delivery, superseding the inherited runnerless-only default and ShadowSync-only hosted-runner exception for this cohort. The installed controller is abandoned and must not be revived. Approved Dev successor seed2118b0ff669bedc9a4a9267600ecfec7df4afc6c supplies _ops/POLICY.md, _ops/baseline/README.md and delivery-policy.json (local-jobs actions-app), plus the managed SECURITY.md template SHA256b331110c3670cd28ec87e4bdc39f5e23c0488af39a046ab8e7003d4b9f498996 copied byte-for-byte with markers. These owner bytes are approved source, not a claim that successor Dev has been published, admitted or installed. Initial owner/admin bootstrap, actual publication clearance, current-main CI/App readiness and writer activation remain distinct gates."
+  }
+}
