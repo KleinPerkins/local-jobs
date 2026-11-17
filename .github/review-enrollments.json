@@ -123,6 +123,7 @@
         }
       },
       "scope": "Live public schema observation: expectedHeadOid is a supported GitObjectID input for enablePullRequestAutoMerge. It constrains head only; strict required checks and stale approval dismissal arbitrate base races. Schema availability is not proof of a particular merge."
-    }
+    },
+    "delivery_authority": "The Chaos Scheduler App is the only authorized approver/merger and always supplies its own qualifying approval and native squash request. This is an authorization and operating rule, not atomic technical exclusivity. A different write-capable actor may arm auto-merge after the App final check but before its approval, and that approval may release the other request; the operator accepted this limited residual race on 2026-11-17. Observed foreign or unknown auto-merge requests still reject. Other approvals cannot substitute for App admission evidence; unsolicited coexisting approvals are not inherently prohibited. Agents never manually merge, arm/cancel auto-merge or bypass checks. Initial owner/admin bootstrap remains separate."
   }
 }
