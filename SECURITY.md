@@ -1,23 +1,29 @@
+<!-- BEGIN KleinPerkins/dev baseline (managed by KleinPerkins/dev; do not hand-edit — see _ops/baseline/README.md in KleinPerkins/dev) -->
 # Security Policy
 
 This repository is owned by **KleinPerkins**. There is no public bug-bounty program.
 
 ## Reporting a vulnerability
 
-Report security issues privately through this repository's private security advisories
-(GitHub → Security → Advisories → "Report a vulnerability") or an existing private
-channel with the owner. Do not put sensitive details in a public issue.
+If you discover a security issue in this repository, please report it privately rather than
+opening a public issue:
 
-Include the issue's impact, reproduction steps or a proof of concept, and any suggested
-remediation.
+- Preferred: open a **private security advisory** on this repository
+  (GitHub → Security → Advisories → "Report a vulnerability").
+- Alternative: reach the owner directly through an existing private channel.
 
-## Response and fixes
+Please include:
+- A description of the issue and its potential impact.
+- Steps to reproduce, or a proof of concept if available.
+- Any suggested remediation, if known.
 
-The single maintainer responds on a best-effort basis, without a formal SLA. Verified
-fixes follow the repository's protected PR process: independent originating-account
-review, required CI checks, and App-controlled approval and native squash merge.
+## Response
+
+This repo is maintained by a single owner (best-effort response; no formal SLA). Reports are
+triaged promptly. Fixes follow the repository's governed verification, review and delivery process.
 
 ## Scope
 
-This policy covers this repository's own code and configuration. Report issues in
-third-party services and dependencies to their maintainers.
+This policy covers this repository's own code and configuration. It does not cover third-party
+services or dependencies; report those upstream.
+<!-- END KleinPerkins/dev baseline -->
